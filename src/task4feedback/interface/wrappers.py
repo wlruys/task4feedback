@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Optional, Self, Type
+from typing import Self
 
 import cxxfilt
 import numpy as np
@@ -11,34 +11,24 @@ from torch_geometric.data import Batch, HeteroData
 
 import task4feedback.fastsim2 as fastsim
 from task4feedback.fastsim2 import (
-    BatchTransitionConditions,
     Data,
-    DefaultTransitionConditions,
     Devices,
     DeviceType,
     EventType,
     ExecutionState,
     Graph,
-    LognormalTaskNoise,
-    ParMETIS_wrapper,
-    RangeTransitionConditions,
-    RuntimeTaskInfo,
     SchedulerInput,
-    SchedulerState,
     Simulator,
     StaticTaskInfo,
     TaskNoise,
     Topology,
-    start_logger,
 )
 
 from .lambdas import DataBlockTransformer, TaskLabeler, VariantBuilder
 from .types import (
-    ConnectionTuple,
     DataBlockTuple,
     DeviceTuple,
     TaskTuple,
-    VariantTuple,
     _bytes_to_readable,
 )
 
@@ -729,7 +719,7 @@ class SimulatorInput:
     data: DataBlocks
     system: System
     task_noise: TaskNoise
-    transition_conditions: fastsim.TransitionConditions
+    transition_conditions: fastsim.HysteresisTransitionConditions
     top_k_candidates: int = 1
 
     def __init__(
@@ -738,11 +728,17 @@ class SimulatorInput:
         data: DataBlocks,
         system: System,
         task_noise: TaskNoise | None = None,
-        transition_conditions: fastsim.TransitionConditions | None = None,
+        transition_conditions: fastsim.HysteresisTransitionConditions | None = None,
         top_k_candidates: int = 1,
     ):
         if transition_conditions is None:
-            transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
+            transition_conditions = fastsim.HysteresisTransitionConditions()
+        if not isinstance(
+            transition_conditions, fastsim.HysteresisTransitionConditions
+        ):
+            raise TypeError(
+                "transition_conditions must be HysteresisTransitionConditions"
+            )
 
         if task_noise is None:
             task_noise = TaskNoise(graph.static_graph)

@@ -1,4 +1,5 @@
 #pragma once
+#include "macros.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>

@@ -62,7 +62,9 @@ void init_task_ext(nb::module_ &m) {
       .def("clear_variants", &Graph::clear_variants, "task_id"_a)
       .def("clear_all_variants", &Graph::clear_all_variants)
       .def("get_task_dependencies", &Graph::get_task_dependencies, "task_id"_a)
-      .def("finalize", &Graph::finalize, "ensure_dependencies"_a = false,
+      .def("finalize",
+           static_cast<void (Graph::*)(bool, bool)>(&Graph::finalize),
+           "ensure_dependencies"_a = false,
            "create_data_tasks"_a = true);
 
   nb::class_<StaticTaskInfo>(m, "StaticTaskInfo")

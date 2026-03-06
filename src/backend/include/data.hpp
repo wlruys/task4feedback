@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <tracy/Tracy.hpp>
+#include <type_traits>
 #include <unordered_map>
 
 struct XYPosition {
@@ -51,57 +52,57 @@ public:
   }
 
   void set_size(dataid_t id, mem_t size) {
-    assert(id < sizes.size());
+    T4F_INVARIANT(id < sizes.size());
     sizes[id] = size;
   }
 
   void set_tag(dataid_t id, int tag) {
-    assert(id < data_tags.size());
+    T4F_INVARIANT(id < data_tags.size());
     data_tags[id] = tag;
   }
 
   void set_x_pos(dataid_t id, float x) {
-    assert(id < xy_positions.size());
+    T4F_INVARIANT(id < xy_positions.size());
     xy_positions[id].x = x;
   }
 
   void set_y_pos(dataid_t id, float y) {
-    assert(id < xy_positions.size());
+    T4F_INVARIANT(id < xy_positions.size());
     xy_positions[id].y = y;
   }
 
   [[nodiscard]] float get_x_pos(dataid_t id) const {
-    assert(id < xy_positions.size());
+    T4F_INVARIANT(id < xy_positions.size());
     return xy_positions[id].x;
   }
 
   [[nodiscard]] float get_y_pos(dataid_t id) const {
-    assert(id < xy_positions.size());
+    T4F_INVARIANT(id < xy_positions.size());
     return xy_positions[id].y;
   }
 
   int get_tag(dataid_t id) const {
-    assert(id < data_tags.size());
+    T4F_INVARIANT(id < data_tags.size());
     return data_tags[id];
   }
 
   void set_type(dataid_t id, int type) {
-    assert(id < data_types.size());
+    T4F_INVARIANT(id < data_types.size());
     data_types[id] = type;
   }
 
   int get_type(dataid_t id) const {
-    assert(id < data_types.size());
+    T4F_INVARIANT(id < data_types.size());
     return data_types[id];
   }
 
   void set_location(dataid_t id, devid_t location) {
-    assert(id < initial_location.size());
+    T4F_INVARIANT(id < initial_location.size());
 
     initial_location[id] = location;
   }
   void set_name(dataid_t id, std::string name) {
-    assert(id < data_names.size());
+    T4F_INVARIANT(id < data_names.size());
     data_names[id] = std::move(name);
     name_to_id[data_names[id]] = id;
   }
@@ -121,7 +122,7 @@ public:
       xy_positions.resize(id + 1);
     }
 
-    assert(id < sizes.size());
+    T4F_INVARIANT(id < sizes.size());
     set_size(id, size);
     set_location(id, location);
     set_name(id, std::move(name));
@@ -155,12 +156,12 @@ public:
   }
 
   [[nodiscard]] devid_t get_location(dataid_t id) const {
-    assert(id < initial_location.size());
-    return initial_location[id];
+      T4F_INVARIANT(id < initial_location.size());
+      return initial_location[id];
   }
   [[nodiscard]] const std::string &get_name(dataid_t id) const {
-    assert(id < data_names.size());
-    return data_names[id];
+      T4F_INVARIANT(id < data_names.size());
+      return data_names[id];
   }
 
   [[nodiscard]] auto get_sizes() const {
@@ -209,7 +210,7 @@ public:
   LocationManager(const LocationManager &) = default;
 
   [[nodiscard]] inline bool is_valid(dataid_t data_id, devid_t device_id) const {
-    assert(data_id < num_data && device_id < num_devices);
+    T4F_INVARIANT(data_id < num_data && device_id < num_devices);
     // Check if "device_id"-th bit of "data_id"-th location is set
     return locations[data_id] & (1 << device_id);
   }
@@ -279,7 +280,7 @@ public:
 
   inline devicemask_t invalidate_except(dataid_t data_id, devid_t device_id,
                                         timecount_t current_time) {
-    assert(data_id < num_data && device_id < num_devices);
+    T4F_INVARIANT(data_id < num_data && device_id < num_devices);
     devicemask_t old_status = locations[data_id];
     devicemask_t keep_mask = (1 << device_id);
     // Keep only the specified device, invalidate all others
@@ -345,7 +346,7 @@ protected:
 public:
   MovementManager() = default;
 
-  bool is_moving(dataid_t data_id, devid_t destination) const {
+  [[nodiscard]] bool is_moving(dataid_t data_id, devid_t destination) const {
     return movement_times.find(pack_movement_key(data_id, destination)) != movement_times.end();
   }
 
@@ -364,13 +365,18 @@ public:
     return true;
   }
 
-  inline void set_completion(dataid_t data_id, devid_t destination,
-                             timecount_t global_completion_time) {
-    movement_times[pack_movement_key(data_id, destination)] = global_completion_time;
+  [[nodiscard]] inline bool try_set_completion(dataid_t data_id, devid_t destination,
+                                               timecount_t global_completion_time) {
+    auto [it, inserted] =
+        movement_times.emplace(pack_movement_key(data_id, destination), global_completion_time);
+    if (!inserted) {
+      it->second = global_completion_time;
+    }
+    return inserted;
   }
 
-  inline void remove(dataid_t data_id, devid_t destination) {
-    movement_times.erase(pack_movement_key(data_id, destination));
+  [[nodiscard]] inline bool remove(dataid_t data_id, devid_t destination) {
+    return movement_times.erase(pack_movement_key(data_id, destination)) > 0;
   }
 };
 
@@ -385,469 +391,371 @@ enum class InsertResult {
   Failed
 };
 
-// class LRU_manager {
-// private:
-//   mem_t evicted_size = 0;
-//   mem_t max_usage = 0;
-
-//   struct alignas(64) DeviceLRU {
-//     using node_t = int32_t;
-//     static constexpr node_t kNull = -1;
-
-//     struct Node {
-//       dataid_t id;
-//       mem_t bytes;
-//       node_t next;
-//       node_t prev;
-//     };
-
-//     std::vector<Node> nodes;
-//     ankerl::unordered_dense::map<dataid_t, node_t> where;
-//     node_t free_head = kNull;
-//     mem_t used_bytes = 0;
-//     mem_t capacity_bytes = 0;
-//     std::size_t hard_max_items = 0;
-
-// #ifndef NDEBUG
-//     uint32_t op_counter = 0;
-//     static constexpr uint32_t kCheckPeriod = 8192;
-// #endif
-
-//     void init(std::size_t initial_max_items, mem_t cap_bytes,
-//               std::size_t reserve_items_hint, std::size_t hard_cap_items = 0) {
-//       capacity_bytes = cap_bytes;
-//       hard_max_items = hard_cap_items;
-
-//       nodes.resize(initial_max_items + 1);
-//       nodes[0] = {dataid_t(-1), 0, 0, 0}; // Sentinel node
-
-//       free_head = initial_max_items > 0 ? 1 : kNull;
-//       for (node_t i = 1; i < static_cast<node_t>(initial_max_items); ++i) {
-//         nodes[i].next = i + 1;
-//       }
-//       if (initial_max_items > 0) {
-//         nodes[initial_max_items].next = kNull;
-//       }
-
-//       where.clear();
-//       where.reserve(reserve_items_hint);
-//       used_bytes = 0;
-
-// #ifndef NDEBUG
-//       op_counter = 0;
-// #endif
-//     }
-
-//     bool ensure_free_node_() {
-//       if (free_head != kNull) return true;
-
-//       const std::size_t old_user_items = nodes.size() - 1;
-//       std::size_t new_user_items = old_user_items == 0 ? 1024 : old_user_items * 2;
-
-//       if (hard_max_items != 0 && new_user_items > hard_max_items) {
-//         new_user_items = hard_max_items;
-//         if (new_user_items <= old_user_items) return false;
-//       }
-
-//       const std::size_t new_n = new_user_items + 1;
-//       nodes.resize(new_n);
-
-//       free_head = static_cast<node_t>(old_user_items + 1);
-//       for (node_t i = free_head; i < static_cast<node_t>(new_n - 1); ++i) {
-//         nodes[i].next = i + 1;
-//       }
-//       nodes[new_n - 1].next = kNull;
-
-//       SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
-//                   old_user_items, new_user_items);
-//       return true;
-//     }
-
-//     void unlink_(node_t n) {
-//       const node_t p = nodes[n].prev;
-//       const node_t q = nodes[n].next;
-//       nodes[p].next = q;
-//       nodes[q].prev = p;
-//     }
-
-//     void link_front_(node_t n) {
-//       const node_t head = nodes[0].next;
-//       nodes[n].prev = 0;
-//       nodes[n].next = head;
-//       nodes[head].prev = n;
-//       nodes[0].next = n;
-//     }
-
-//     void touch_node_(node_t n) {
-//       if (nodes[0].next == n) return;
-//       unlink_(n);
-//       link_front_(n);
-//     }
-
-// #ifndef NDEBUG
-//     void maybe_check_invariants_() {
-//       if ((++op_counter % kCheckPeriod) != 0) return;
-
-//       const node_t head = nodes[0].next;
-//       const node_t tail = nodes[0].prev;
-
-//       if (head == 0) {
-//         assert(tail == 0 && where.empty());
-//         return;
-//       }
-
-//       assert(nodes[head].prev == 0 && nodes[tail].next == 0);
-
-//       std::size_t seen = 0;
-//       node_t cur = head;
-//       node_t last = 0;
-
-//       while (cur != 0) {
-//         assert(nodes[cur].id != dataid_t(-1));
-//         auto it = where.find(nodes[cur].id);
-//         assert(it != where.end() && it->second == cur);
-//         assert(nodes[cur].prev == last);
-
-//         last = cur;
-//         cur = nodes[cur].next;
-//         assert(++seen <= nodes.size());
-//       }
-//       assert(last == tail && seen == where.size());
-//     }
-// #endif
-
-//     InsertResult insert_or_update(dataid_t id, mem_t bytes) {
-//       auto [it, inserted] = where.try_emplace(id, 0);
-
-//       if (!inserted) {
-//         const node_t n = it->second;
-//         if (nodes[n].bytes != bytes) {
-//           used_bytes += (bytes - nodes[n].bytes);
-//           nodes[n].bytes = bytes;
-//         }
-//         touch_node_(n);
-// #ifndef NDEBUG
-//         maybe_check_invariants_();
-// #endif
-//         return InsertResult::Updated;
-//       }
-
-//       if (!ensure_free_node_()) {
-//         where.erase(it);
-//         return InsertResult::Failed;
-//       }
-
-//       const node_t n = free_head;
-//       free_head = nodes[n].next;
-
-//       it->second = n;
-
-//       nodes[n].id = id;
-//       nodes[n].bytes = bytes;
-//       link_front_(n);
-
-//       used_bytes += bytes;
-
-// #ifndef NDEBUG
-//       maybe_check_invariants_();
-// #endif
-//       return InsertResult::Inserted;
-//     }
-
-//     mem_t erase(dataid_t id) {
-//       auto it = where.find(id);
-//       if (it == where.end()) return 0;
-
-//       const node_t n = it->second;
-//       where.erase(it);
-//       unlink_(n);
-
-//       const mem_t b = nodes[n].bytes;
-//       used_bytes -= b;
-
-//       nodes[n].next = free_head;
-//       free_head = n;
-
-// #ifndef NDEBUG
-//       maybe_check_invariants_();
-// #endif
-//       return b;
-//     }
-
-//     std::size_t collect_lru_victims(std::size_t bytes_needed,
-//                                     std::span<const dataid_t> used_ids,
-//                                     DataIDList &out) const {
-//       out.clear();
-//       std::size_t acc = 0;
-//       node_t cur = nodes[0].prev;
-
-//       if (used_ids.empty()) {
-//         while (cur != 0 && acc < bytes_needed) {
-//           acc += static_cast<std::size_t>(nodes[cur].bytes);
-//           out.push_back(nodes[cur].id);
-//           cur = nodes[cur].prev;
-//         }
-//       } else {
-//         // Check that this data is not used by the requester before adding to eviction list
-//         while (cur != 0 && acc < bytes_needed) {
-//           const dataid_t id = nodes[cur].id;
-
-//           if (!std::binary_search(used_ids.begin(), used_ids.end(), id)) {
-//             acc += static_cast<std::size_t>(nodes[cur].bytes);
-//             out.push_back(id);
-//           }
-//           cur = nodes[cur].prev;
-//         }
-//       }
-//       return acc;
-//     }
-//   };
-
-//   std::vector<DeviceLRU> lrus_;
-//   mutable DataIDList id_buffer;
-
-//   bool is_valid_device(devid_t id) const {
-//     return id >= 0 && static_cast<std::size_t>(id) < lrus_.size();
-//   }
-
-// public:
-//   LRU_manager() = default;
-
-//   explicit LRU_manager(const Devices &devices,
-//                        mem_t median_block_size,
-//                        std::size_t hard_max_items_per_device = 0,
-//                        std::size_t distinct_items_hint = static_cast<std::size_t>(-1))
-//       : lrus_(devices.size()) {
-
-//     median_block_size = median_block_size > 0 ? median_block_size : 1;
-//     constexpr std::size_t kMinItems = 4096;
-//     constexpr std::size_t kMaxItems = 1'000'000;
-//     const bool has_distinct_items_hint = distinct_items_hint != static_cast<std::size_t>(-1);
-
-//     for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
-//       const mem_t cap = devices.get_max_resources(dev).mem;
-//       std::size_t expected = static_cast<std::size_t>(cap / median_block_size);
-
-//       if (has_distinct_items_hint) expected = std::min(expected, distinct_items_hint);
-//       if (hard_max_items_per_device != 0) expected = std::min(expected,
-//       hard_max_items_per_device);
-
-//       std::size_t initial_items, reserve_items;
-//       if (has_distinct_items_hint) {
-//         initial_items = expected == 0 ? 0 : 2 * expected;
-//         reserve_items = expected;
-//       } else {
-//         initial_items = std::clamp(2 * expected, kMinItems, kMaxItems);
-//         reserve_items = std::clamp(expected, kMinItems / 2, initial_items);
-//       }
-
-//       if (hard_max_items_per_device != 0) {
-//         initial_items = std::min(initial_items, hard_max_items_per_device);
-//         reserve_items = std::min(reserve_items, initial_items);
-//       }
-
-//       lrus_[dev].init(initial_items, cap, reserve_items, hard_max_items_per_device);
-//     }
-
-//     id_buffer.reserve(20);
-//   }
-
-//   LRU_manager(const LRU_manager &other)
-//       : evicted_size(other.evicted_size),
-//         max_usage(other.max_usage),
-//         lrus_(other.lrus_) {
-//     id_buffer.reserve(other.id_buffer.capacity());
-//   }
-
-//   void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
-//     assert(is_valid_device(device_id));
-//     auto &lru = lrus_[device_id];
-
-//     const InsertResult result = lru.insert_or_update(data_id, mem_size);
-
-//     if (result == InsertResult::Failed) [[unlikely]] {
-//       SPDLOG_ERROR("LRU_manager::read(): hard cap hit on device {}; data_id {} not tracked",
-//       device_id, data_id); assert(false && "LRU_manager::read(): hard cap hit; increase
-//       hard_max_items_per_device"); return;
-//     }
-
-//     if (result == InsertResult::Inserted) {
-//       if (device_id > 0 && lru.used_bytes > max_usage) {
-//         max_usage = lru.used_bytes;
-//       }
-//       if (lru.used_bytes > lru.capacity_bytes) [[unlikely]] {
-//         SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
-//         data_id, mem_size); assert(lru.used_bytes <= lru.capacity_bytes && "LRU_manager::read():
-//         size exceeds max size");
-//       }
-//     }
-//   }
-
-//   void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
-//     assert(is_valid_device(device_id));
-//     const mem_t removed = lrus_[device_id].erase(data_id);
-//     assert(removed > 0 && "invalidate(): data_id not present");
-
-//     if (evict) evicted_size += removed;
-//   }
-
-//   std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
-//                                       std::span<const dataid_t> used_ids) const {
-//     assert(is_valid_device(device_id));
-
-//     const std::size_t accumulated = lrus_[device_id].collect_lru_victims(mem_size, used_ids,
-//     id_buffer); assert(accumulated >= mem_size && "getLRUids(): evictable memory size is smaller
-//     than requested");
-
-//     return id_buffer;
-//   }
-
-//   mem_t get_mem(devid_t device_id) const {
-//     assert(is_valid_device(device_id));
-//     return lrus_[device_id].used_bytes;
-//   }
-
-//   mem_t get_evicted_memory_size() const {
-//     return evicted_size;
-//   }
-
-//   mem_t get_max_memory_usage() const {
-//     mem_t sum = 0;
-//     for (const auto& lru : lrus_) sum += lru.used_bytes;
-//     return sum;
-//   }
-// };
-
 class LRU_manager {
 private:
   mem_t evicted_size = 0;
   mem_t max_usage = 0;
-  uint32_t n_devices_{0};
-  // For each device:
-  //  - a list maintaining LRU (front) → MRU (back)
-  //  - a map from data_id → its position in that list
-  //  - a map from data_id → its mem_size
-  std::vector<std::list<dataid_t>> lru_lists_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<dataid_t>::iterator>>
-      position_maps_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, mem_t>> size_maps_;
-  std::vector<mem_t> sizes_;
-  std::vector<mem_t> max_sizes_;
+
+  struct alignas(64) DeviceLRU {
+    using node_t = int32_t;
+    static constexpr node_t kNull = -1;
+
+    struct Node {
+      dataid_t id;
+      mem_t bytes;
+      node_t next;
+      node_t prev;
+    };
+
+    std::vector<Node> nodes;
+    ankerl::unordered_dense::map<dataid_t, node_t> where;
+    node_t free_head = kNull;
+    mem_t used_bytes = 0;
+    mem_t capacity_bytes = 0;
+    std::size_t hard_max_items = 0;
+
+#ifndef NDEBUG
+    uint32_t op_counter = 0;
+    static constexpr uint32_t kCheckPeriod = 8192;
+#endif
+
+    void init(std::size_t initial_max_items, mem_t cap_bytes,
+              std::size_t reserve_items_hint, std::size_t hard_cap_items = 0) {
+      capacity_bytes = cap_bytes;
+      hard_max_items = hard_cap_items;
+
+      nodes.resize(initial_max_items + 1);
+      nodes[0] = {dataid_t(-1), 0, 0, 0}; // Sentinel node
+
+      free_head = initial_max_items > 0 ? 1 : kNull;
+      for (node_t i = 1; i < static_cast<node_t>(initial_max_items); ++i) {
+        nodes[i].next = i + 1;
+      }
+      if (initial_max_items > 0) {
+        nodes[initial_max_items].next = kNull;
+      }
+
+      where.clear();
+      where.reserve(reserve_items_hint);
+      used_bytes = 0;
+
+#ifndef NDEBUG
+      op_counter = 0;
+#endif
+    }
+
+    bool ensure_free_node_() {
+      if (free_head != kNull) return true;
+
+      const std::size_t old_user_items = nodes.size() - 1;
+      std::size_t new_user_items = old_user_items == 0 ? 1024 : old_user_items * 2;
+
+      if (hard_max_items != 0 && new_user_items > hard_max_items) {
+        new_user_items = hard_max_items;
+        if (new_user_items <= old_user_items) return false;
+      }
+
+      const std::size_t new_n = new_user_items + 1;
+      nodes.resize(new_n);
+
+      free_head = static_cast<node_t>(old_user_items + 1);
+      for (node_t i = free_head; i < static_cast<node_t>(new_n - 1); ++i) {
+        nodes[i].next = i + 1;
+      }
+      nodes[new_n - 1].next = kNull;
+
+      #ifndef NDEBUG
+        SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
+            old_user_items, new_user_items);
+      #endif
+      return true;
+    }
+
+    void unlink_(node_t n) {
+      const node_t p = nodes[n].prev;
+      const node_t q = nodes[n].next;
+      nodes[p].next = q;
+      nodes[q].prev = p;
+    }
+
+    void link_front_(node_t n) {
+      const node_t head = nodes[0].next;
+      nodes[n].prev = 0;
+      nodes[n].next = head;
+      nodes[head].prev = n;
+      nodes[0].next = n;
+    }
+
+    void touch_node_(node_t n) {
+      if (nodes[0].next == n) return;
+      unlink_(n);
+      link_front_(n);
+    }
+
+#ifndef NDEBUG
+    void maybe_check_invariants_() {
+      if ((++op_counter % kCheckPeriod) != 0) return;
+
+      const node_t head = nodes[0].next;
+      const node_t tail = nodes[0].prev;
+
+      if (head == 0) {
+        T4F_INVARIANT(tail == 0 && where.empty());
+        return;
+      }
+
+      T4F_INVARIANT(nodes[head].prev == 0 && nodes[tail].next == 0);
+
+      std::size_t seen = 0;
+      node_t cur = head;
+      node_t last = 0;
+
+      while (cur != 0) {
+        T4F_INVARIANT(nodes[cur].id != dataid_t(-1));
+        auto it = where.find(nodes[cur].id);
+        T4F_INVARIANT(it != where.end() && it->second == cur);
+        T4F_INVARIANT(nodes[cur].prev == last);
+
+        last = cur;
+        cur = nodes[cur].next;
+        T4F_INVARIANT(++seen <= nodes.size());
+      }
+      T4F_INVARIANT(last == tail && seen == where.size());
+    }
+#endif
+
+    InsertResult insert_or_update(dataid_t id, mem_t bytes) {
+      auto [it, inserted] = where.try_emplace(id, 0);
+
+      if (!inserted) {
+        const node_t n = it->second;
+        if (nodes[n].bytes != bytes) {
+          used_bytes += (bytes - nodes[n].bytes);
+          nodes[n].bytes = bytes;
+        }
+        touch_node_(n);
+#ifndef NDEBUG
+        maybe_check_invariants_();
+#endif
+        return InsertResult::Updated;
+      }
+
+      if (!ensure_free_node_()) {
+        where.erase(it);
+        return InsertResult::Failed;
+      }
+
+      const node_t n = free_head;
+      free_head = nodes[n].next;
+
+      it->second = n;
+
+      nodes[n].id = id;
+      nodes[n].bytes = bytes;
+      link_front_(n);
+
+      used_bytes += bytes;
+
+#ifndef NDEBUG
+      maybe_check_invariants_();
+#endif
+      return InsertResult::Inserted;
+    }
+
+    mem_t erase(dataid_t id) {
+      auto it = where.find(id);
+      if (it == where.end()) return 0;
+
+      const node_t n = it->second;
+      where.erase(it);
+      unlink_(n);
+
+      const mem_t b = nodes[n].bytes;
+      used_bytes -= b;
+
+      nodes[n].next = free_head;
+      free_head = n;
+
+#ifndef NDEBUG
+      maybe_check_invariants_();
+#endif
+      return b;
+    }
+
+    std::size_t collect_lru_victims(std::size_t bytes_needed,
+                                    std::span<const dataid_t> used_ids,
+                                    DataIDList &out) const {
+      out.clear();
+      std::size_t acc = 0;
+      node_t cur = nodes[0].prev;
+
+      if (used_ids.empty()) {
+        while (cur != 0 && acc < bytes_needed) {
+          acc += static_cast<std::size_t>(nodes[cur].bytes);
+          out.push_back(nodes[cur].id);
+          cur = nodes[cur].prev;
+        }
+      } else {
+        // Check that this data is not used by the requester before adding to eviction list
+        while (cur != 0 && acc < bytes_needed) {
+          const dataid_t id = nodes[cur].id;
+
+          if (!std::binary_search(used_ids.begin(), used_ids.end(), id)) {
+            acc += static_cast<std::size_t>(nodes[cur].bytes);
+            out.push_back(id);
+          }
+          cur = nodes[cur].prev;
+        }
+      }
+      return acc;
+    }
+
+    static DeviceLRU clone_with_headroom(const DeviceLRU &src, std::size_t min_items = 0) {
+      DeviceLRU dst;
+      const std::size_t active_items = src.where.size();
+      std::size_t target_items = active_items;
+
+      if (active_items != 0) {
+        const std::size_t src_user_capacity = src.nodes.size() > 0 ? src.nodes.size() - 1 : 0;
+        const std::size_t active_half = active_items / 2;
+        const std::size_t retained_slack_half =
+            src_user_capacity > active_items
+                ? std::min((src_user_capacity - active_items) / 2, active_items)
+                : 0;
+        const std::size_t headroom = std::max<std::size_t>({64, active_half, retained_slack_half});
+
+        target_items = active_items + headroom;
+      }
+
+      target_items = std::max(target_items, min_items);
+      target_items = std::max(target_items, active_items);
+
+      if (src.hard_max_items != 0) {
+        target_items = std::min(target_items, src.hard_max_items);
+      }
+
+      dst.init(target_items, src.capacity_bytes, target_items, src.hard_max_items);
+
+      node_t cur = src.nodes[0].prev; // LRU -> MRU so insert_front preserves order
+      while (cur != 0) {
+        const auto result = dst.insert_or_update(src.nodes[cur].id, src.nodes[cur].bytes);
+        T4F_INVARIANT(result != InsertResult::Failed);
+        cur = src.nodes[cur].prev;
+      }
+
+      dst.used_bytes = src.used_bytes;
+      return dst;
+    }
+  };
+
+  std::vector<DeviceLRU> lrus_;
   mutable DataIDList id_buffer;
+
+  bool is_valid_device(devid_t id) const {
+    return id >= 0 && static_cast<std::size_t>(id) < lrus_.size();
+  }
 
 public:
   LRU_manager() = default;
 
-  // Constructor: initialize for n_devices [0 .. n_devices-1]
-  explicit LRU_manager(const Devices &devices)
-      : n_devices_(devices.size()), lru_lists_(devices.size()), position_maps_(devices.size()),
-        size_maps_(devices.size()), sizes_(devices.size()), max_sizes_(devices.size()) {
-    for (auto &size : sizes_) {
-      size = 0;
+  explicit LRU_manager(const Devices &devices,
+                       mem_t median_block_size,
+                       std::size_t hard_max_items_per_device = 0,
+                       std::size_t distinct_items_hint = static_cast<std::size_t>(-1))
+      : lrus_(devices.size()) {
+
+    median_block_size = median_block_size > 0 ? median_block_size : 1;
+    constexpr std::size_t kMinItems = 4096;
+    constexpr std::size_t kMaxItems = 1'000'000;
+    const bool has_distinct_items_hint = distinct_items_hint != static_cast<std::size_t>(-1);
+
+    for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
+      const mem_t cap = devices.get_max_resources(dev).mem;
+      std::size_t expected = static_cast<std::size_t>(cap / median_block_size);
+
+      if (has_distinct_items_hint) expected = std::min(expected, distinct_items_hint);
+      if (hard_max_items_per_device != 0) expected = std::min(expected, hard_max_items_per_device);
+
+      std::size_t initial_items, reserve_items;
+      if (has_distinct_items_hint) {
+        initial_items = expected == 0 ? 0 : 2 * expected;
+        reserve_items = expected;
+      } else {
+        initial_items = std::clamp(2 * expected, kMinItems, kMaxItems);
+        reserve_items = std::clamp(expected, kMinItems / 2, initial_items);
+      }
+
+      if (hard_max_items_per_device != 0) {
+        initial_items = std::min(initial_items, hard_max_items_per_device);
+        reserve_items = std::min(reserve_items, initial_items);
+      }
+
+      lrus_[dev].init(initial_items, cap, reserve_items, hard_max_items_per_device);
     }
-    for (int i = 0; i < devices.size(); i++) {
-      max_sizes_[i] = devices.get_max_resources(i).mem;
-    }
+
     id_buffer.reserve(20);
   }
 
-  // read: add (device_id, data_id, mem_size). If present, update MRU; else insert.
-  void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
-    assert(device_id >= 0 && device_id < n_devices_);
-
-    auto &lst = lru_lists_[device_id];
-    auto &pos = position_maps_[device_id];
-    auto &smap = size_maps_[device_id];
-    auto &size = sizes_[device_id];
-    auto &max_size = max_sizes_[device_id];
-    auto it = pos.find(data_id);
-    if (it != pos.end()) {
-      // already present: move to MRU
-      lst.erase(it->second);
-    } else {
-      size += mem_size;
-      if (size > max_usage && device_id > 0) {
-        max_usage = size;
-      }
-      if (size > max_size) {
-        SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
-                     data_id, mem_size);
-        assert(size <= max_size && "LRU_manager::read(): size exceeds max size");
-      }
-    }
-    // insert at MRU (back)
-    lst.push_back(data_id);
-    auto new_it = std::prev(lst.end());
-    pos[data_id] = new_it;
-    smap[data_id] = mem_size; // update size
-  }
-
   LRU_manager(const LRU_manager &other)
-      : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
-        position_maps_(other.n_devices_), size_maps_(other.size_maps_), sizes_(other.sizes_),
-        max_sizes_(other.max_sizes_), evicted_size(other.evicted_size), max_usage(other.max_usage) {
-    ZoneScoped;
-    // Rebuild position_maps_
-    for (devid_t dev = 0; dev < n_devices_; ++dev) {
-      position_maps_[dev].reserve(other.position_maps_[dev].size());
-      for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
-        position_maps_[dev][*it] = it;
-      }
+      : evicted_size(other.evicted_size), max_usage(other.max_usage), lrus_(other.lrus_.size()) {
+    constexpr std::size_t kMinCloneItems = 4096;
+    for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
+      lrus_[dev] = DeviceLRU::clone_with_headroom(other.lrus_[dev], kMinCloneItems);
     }
     id_buffer.reserve(other.id_buffer.capacity());
   }
 
-  // invalidate: remove (device_id, data_id); assert if missing
-  void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
-    assert(device_id >= 0 && device_id < n_devices_);
+  void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
+    T4F_INVARIANT(is_valid_device(device_id));
+    // if (mem_size <= 0) {
+    //   // Zero-sized objects are intentionally not tracked in the LRU.
+    //   return;
+    // }
+    auto &lru = lrus_[device_id];
 
-    auto &lst = lru_lists_[device_id];
-    auto &pos = position_maps_[device_id];
-    auto &smap = size_maps_[device_id];
-    auto &size = sizes_[device_id];
+    const InsertResult result = lru.insert_or_update(data_id, mem_size);
 
-    auto it = pos.find(data_id);
-    assert(it != pos.end() && "invalidate(): data_id not present");
+    if (result == InsertResult::Failed) [[unlikely]] {
+      SPDLOG_ERROR("LRU_manager::read(): hard cap hit on device {}; data_id {} not tracked", device_id, data_id);
+      T4F_INVARIANT(false && "LRU_manager::read(): hard cap hit; increase hard_max_items_per_device");
+      return;
+    }
 
-    lst.erase(it->second);
-    pos.erase(it);
-    auto removed = smap[data_id];
-    // assert(removed > 0 && "invalidate(): data_id not present in size map");
-    size -= removed; // update size
-    if (evict)
-      evicted_size += smap[data_id];
-    smap.erase(data_id);
+    if (result == InsertResult::Inserted) {
+      if (device_id > 0 && lru.used_bytes > max_usage) {
+        max_usage = lru.used_bytes;
+      }
+      if (lru.used_bytes > lru.capacity_bytes) [[unlikely]] {
+        SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id, data_id, mem_size);
+        T4F_INVARIANT(lru.used_bytes <= lru.capacity_bytes && "LRU_manager::read(): size exceeds max size");
+      }
+    }
   }
 
-  // getLRUids: fill id_buffer[device_id] with the least-recently-used data_ids
-  // until their cumulative mem_size ≥ requested mem_size, and return it.
-  const std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
-                                            std::span<const dataid_t> used_ids) const {
-    assert(device_id >= 0 && device_id < n_devices_);
+  void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
+    T4F_INVARIANT(is_valid_device(device_id));
+    const mem_t removed = lrus_[device_id].erase(data_id);
+    // if (removed <= 0) {
+    //   // Object is not tracked by LRU (e.g., zero-sized); nothing to invalidate.
+    //   return;
+    // }
 
-    auto &lst = lru_lists_[device_id];
-    auto &smap = size_maps_[device_id];
-    id_buffer.clear();
-    std::size_t accumulated = 0;
+    if (evict) evicted_size += removed;
+  }
 
-    for (auto it = lst.begin(); it != lst.end() && accumulated < mem_size; ++it) {
-      dataid_t did = *it;
-      if (std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end()) {
-        continue; // skip if used by the task
-      }
-      auto sz_it = smap.find(did);
-      assert(sz_it != smap.end() && "size missing for data_id");
-      accumulated += sz_it->second;
-      id_buffer.push_back(did);
-    }
-    assert(accumulated >= mem_size &&
-           "getLRUids(): evictable memory isze is smaller than the requested size");
+  std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
+                                      std::span<const dataid_t> used_ids) const {
+    T4F_INVARIANT(is_valid_device(device_id));
+
+    const std::size_t accumulated = lrus_[device_id].collect_lru_victims(mem_size, used_ids, id_buffer);
+    T4F_INVARIANT(accumulated >= mem_size && "getLRUids(): evictable memory size is smaller than requested");
+
     return id_buffer;
   }
 
   mem_t get_mem(devid_t device_id) const {
-    assert((device_id >= 0) && (device_id < n_devices_));
-    return sizes_[device_id];
+    T4F_INVARIANT(is_valid_device(device_id));
+    return lrus_[device_id].used_bytes;
   }
 
   mem_t get_evicted_memory_size() const {
@@ -855,11 +763,9 @@ public:
   }
 
   mem_t get_max_memory_usage() const {
-    mem_t total = 0;
-    for (const auto size : sizes_) {
-      total += size;
-    }
-    return total;
+    mem_t sum = 0;
+    for (const auto& lru : lrus_) sum += lru.used_bytes;
+    return sum;
   }
 };
 
@@ -876,8 +782,8 @@ public:
   }
 
   void add_total_movement(devid_t src, devid_t dest, mem_t size) {
-    assert(src < total_data_movement.size());
-    assert(dest < total_data_movement.size());
+    T4F_INVARIANT(src < total_data_movement.size());
+    T4F_INVARIANT(dest < total_data_movement.size());
     total_data_movement[src] += size;
     total_data_movement[dest] += size;
     if (dest == 0) {
@@ -887,7 +793,7 @@ public:
   }
 
   void add_eviction_movement(devid_t device_id, mem_t size) {
-    assert(device_id < eviction_data_movement.size());
+    T4F_INVARIANT(device_id < eviction_data_movement.size());
     eviction_data_movement[device_id] += size;
   }
 
@@ -896,7 +802,7 @@ public:
   }
 
   const mem_t get_total_data_movement(devid_t device_id) const {
-    assert(device_id < total_data_movement.size());
+    T4F_INVARIANT(device_id < total_data_movement.size());
     return total_data_movement[device_id];
   }
 
@@ -905,7 +811,7 @@ public:
   }
 
   const mem_t get_eviction_data_movement(devid_t device_id) const {
-    assert(device_id < eviction_data_movement.size());
+    T4F_INVARIANT(device_id < eviction_data_movement.size());
     return eviction_data_movement[device_id];
   }
 };
@@ -933,14 +839,14 @@ protected:
   static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
                           timecount_t current_time) {
     const bool changed = locations.validate(data_id, device_id, current_time);
-    assert(locations.is_valid(data_id, device_id));
+    T4F_INVARIANT(locations.is_valid(data_id, device_id));
     return changed;
   }
 
   static auto write_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
                            timecount_t current_time) {
-    assert(locations.is_valid(data_id, device_id) &&
-           "write_update requires data to be valid on the writing device");
+    T4F_INVARIANT(locations.is_valid(data_id, device_id) &&
+                  "write_update requires data to be valid on the writing device");
     auto updated_ids = locations.invalidate_except(data_id, device_id, current_time);
     return updated_ids;
   }
@@ -980,7 +886,8 @@ public:
   DataManager(const Data &data, const Devices &devices)
       : mapped_locations(data.size(), devices.size()),
         reserved_locations(data.size(), devices.size()),
-        launched_locations(data.size(), devices.size()), lru_manager(devices),
+        launched_locations(data.size(), devices.size()),
+        lru_manager(devices, estimate_lru_block_size(data), 0, data.size()),
         movement_counter(devices.size()) {
   }
 
@@ -1026,12 +933,13 @@ public:
             "DataManager::initialize(): data_id {} has invalid initial location {} (valid "
             "device ids: 0..{})",
             i, initial_location, devices.size() - 1);
-        assert(false && "DataManager::initialize(): initial data location out of bounds for system "
-                        "devices");
+        T4F_INVARIANT(false &&
+               "DataManager::initialize(): initial data location out of bounds for system "
+               "devices");
       }
 
       if (initial_location_in_bounds && (lru_manager.get_mem(initial_location) + data_size) <=
-                                            devices.get_max_resources(initial_location).mem) {
+                                       devices.get_max_resources(initial_location).mem) {
         mapped_locations.set_valid(i, initial_location, 0);
         reserved_locations.set_valid(i, initial_location, 0);
         launched_locations.set_valid(i, initial_location, 0);
@@ -1066,7 +974,7 @@ public:
       SPDLOG_CRITICAL("DataManager::initialize_data_replicate(): invalid device_id {} "
                       "(valid device ids: 0..{})",
                       device_id, devices.size() - 1);
-      assert(false && "DataManager::initialize_data_replicate(): device_id out of bounds");
+      T4F_INVARIANT(false && "DataManager::initialize_data_replicate(): device_id out of bounds");
     }
 
     if (device_id_in_bounds &&
@@ -1206,7 +1114,7 @@ public:
                           timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, mapped_locations, current_time);
-      assert(mapped_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task request in mapper
   }
@@ -1216,7 +1124,7 @@ public:
                            timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, mapped_locations, current_time);
-      assert(mapped_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task complete
   }
@@ -1226,7 +1134,7 @@ public:
                             timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, reserved_locations, current_time);
-      assert(reserved_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(reserved_locations.is_valid(data_id, device_id));
     }
     // Memory change is handeled by task request in reserver
   }
@@ -1236,7 +1144,7 @@ public:
                              timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, reserved_locations, current_time);
-      assert(reserved_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(reserved_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task complete
   }
@@ -1257,7 +1165,7 @@ public:
       if (changed) {
         add_memory(device_manager, device_id, data_id, size, current_time);
       }
-      assert(launched_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(launched_locations.is_valid(data_id, device_id));
     }
   }
 
@@ -1268,14 +1176,14 @@ public:
       auto changed_flags = write_update(data_id, device_id, launched_locations, current_time);
       const auto size = data.get_size(data_id);
       remove_memory(device_manager, changed_flags, data_id, size, current_time);
-      assert(launched_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(launched_locations.is_valid(data_id, device_id));
     }
   }
 
   void evict_on_update_launched(const Data &data, DeviceManager &device_manager, dataid_t data_id,
                                 devid_t device_id, timecount_t current_time, bool future_usage,
                                 bool write_after_read) {
-    assert(launched_locations.is_valid(data_id, device_id));
+    T4F_INVARIANT(launched_locations.is_valid(data_id, device_id));
     auto updated_devices_launched =
         evict_on_update(data_id, device_id, launched_locations, current_time);
     evict_on_update(data_id, device_id, reserved_locations, current_time);
@@ -1331,10 +1239,10 @@ public:
       // After eviction launched_location has changed and the removal doesn't happen.
       device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
     }
-    assert(launched_locations.is_invalid(data_id, device_id));
-    assert(reserved_locations.is_invalid(data_id, device_id));
+    T4F_INVARIANT(launched_locations.is_invalid(data_id, device_id));
+    T4F_INVARIANT(reserved_locations.is_invalid(data_id, device_id));
     if (!future_usage) {
-      assert(mapped_locations.is_invalid(data_id, device_id));
+      T4F_INVARIANT(mapped_locations.is_invalid(data_id, device_id));
     }
   }
 
@@ -1360,8 +1268,8 @@ public:
     SourceRequest req =
         comm_manager.get_best_available_source(topology, destination, location_flags);
     if (req.found) {
-      assert(launched_locations.is_valid(data_id, req.source) &&
-             "Selected source must have a launched-valid copy");
+      T4F_INVARIANT(launched_locations.is_valid(data_id, req.source) &&
+                    "Selected source must have a launched-valid copy");
     }
 
     return req;
@@ -1370,14 +1278,14 @@ public:
   MovementStatus start_move(const Topology &topology, CommunicationManager &comm_manager,
                             DeviceManager &device_manager, const Data &data, dataid_t data_id,
                             devid_t source, devid_t destination, timecount_t current_time) {
-    assert(launched_locations.is_valid(data_id, source));
-    assert(source >= 0 && source < device_manager.n_devices);
-    assert(destination >= 0 && destination < device_manager.n_devices);
+    T4F_INVARIANT(launched_locations.is_valid(data_id, source));
+    T4F_INVARIANT(source >= 0 && source < device_manager.n_devices);
+    T4F_INVARIANT(destination >= 0 && destination < device_manager.n_devices);
 
     timecount_t completion_time = 0;
     if (movement_manager.try_get_time(data_id, destination, completion_time)) {
-      assert(completion_time >= current_time &&
-             "Outstanding move completion time cannot be in the past");
+      T4F_INVARIANT(completion_time >= current_time &&
+                    "Outstanding move completion time cannot be in the past");
       timecount_t time_left = completion_time - current_time;
       SPDLOG_DEBUG("Data block {} already moving to device {} expected to end after {}", data_id,
                    destination, time_left);
@@ -1388,14 +1296,13 @@ public:
       SPDLOG_DEBUG("Data block {} already at device {}", data_id, destination);
       return {.is_virtual = true, .duration = 0};
     }
-    assert(!movement_manager.is_moving(data_id, destination));
 
     SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}", data_id, source,
                  destination);
 
     const auto size = data.get_size(data_id);
-    assert(device_manager.overflow_mem<TaskState::LAUNCHED>(destination, size) == 0 &&
-           "start_move would exceed LAUNCHED memory on destination");
+    T4F_INVARIANT(device_manager.overflow_mem<TaskState::LAUNCHED>(destination, size) == 0 &&
+                  "start_move would exceed LAUNCHED memory on destination");
 
     lru_manager.read(destination, data_id, size);
     add_memory(device_manager, destination, data_id, size, current_time);
@@ -1403,13 +1310,14 @@ public:
     timecount_t duration = comm_manager.ideal_time_to_transfer(topology, size, source, destination);
 
     if (duration == 0) {
-      assert(source != destination);
+      T4F_INVARIANT(source != destination);
       SPDLOG_DEBUG("Block moving instantly from {} to {}. Check bandwidth settings.", source,
                    destination);
     }
 
-    movement_manager.set_completion(data_id, destination, current_time + duration);
-    assert(movement_manager.is_moving(data_id, destination));
+    const bool inserted =
+        movement_manager.try_set_completion(data_id, destination, current_time + duration);
+    T4F_INVARIANT(inserted && "Duplicate in-flight movement for (data_id, destination)");
 
     comm_manager.reserve_connection(source, destination);
 
@@ -1436,8 +1344,8 @@ public:
         // NOTE(wlr): I'm not 100% sure about the source check
         // Could something that starts at the same time as the move completes be
         // a problem?
-        assert(launched_locations.is_valid(data_id, source));
-        assert(launched_locations.is_valid(data_id, destination));
+        T4F_INVARIANT(launched_locations.is_valid(data_id, source));
+        T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
       }
       return;
     }
@@ -1445,12 +1353,11 @@ public:
     SPDLOG_DEBUG("Completing real move of data block {} from device {} to device {}", data_id,
                  source, destination);
 
-    assert(movement_manager.is_moving(data_id, destination));
-    assert(source != destination);
+    T4F_INVARIANT(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
-    movement_manager.remove(data_id, destination);
-    assert(!movement_manager.is_moving(data_id, destination));
-    assert(launched_locations.is_valid(data_id, destination));
+    const bool removed = movement_manager.remove(data_id, destination);
+    T4F_INVARIANT(removed && "Expected in-flight movement to exist at completion");
+    T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
   }
@@ -1473,8 +1380,8 @@ public:
         // NOTE(wlr): I'm not 100% sure about the source check
         // Could something that starts at the same time as the move completes be
         // a problem?
-        assert(launched_locations.is_valid(data_id, source));
-        assert(launched_locations.is_valid(data_id, destination));
+        T4F_INVARIANT(launched_locations.is_valid(data_id, source));
+        T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
       }
       return;
     }
@@ -1482,16 +1389,15 @@ public:
     SPDLOG_DEBUG("Completing eviction move of data block {} from device {} to device {}", data_id,
                  source, destination);
 
-    assert(movement_manager.is_moving(data_id, destination));
-    assert(source != destination);
+    T4F_INVARIANT(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
     reserved_locations.set_valid(data_id, destination, current_time);
     mapped_locations.set_valid(data_id, destination, current_time);
-    movement_manager.remove(data_id, destination);
-    assert(!movement_manager.is_moving(data_id, destination));
-    assert(launched_locations.is_valid(data_id, destination));
-    assert(reserved_locations.is_valid(data_id, destination));
-    assert(mapped_locations.is_valid(data_id, destination));
+    const bool removed = movement_manager.remove(data_id, destination);
+    T4F_INVARIANT(removed && "Expected in-flight movement to exist at completion");
+    T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
+    T4F_INVARIANT(reserved_locations.is_valid(data_id, destination));
+    T4F_INVARIANT(mapped_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
   }
@@ -1506,7 +1412,6 @@ public:
       device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
       device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
       lru_manager.invalidate(device, data_id);
-      assert(launched_locations.is_invalid(data_id, device));
       mask &= (mask - 1);
     }
   }
@@ -1519,8 +1424,8 @@ public:
     auto mapped_flags = mapped_locations.invalidate_all(data_id, current_time);
     auto reserved_flags = reserved_locations.invalidate_all(data_id, current_time);
     auto launched_flags = launched_locations.invalidate_all(data_id, current_time);
-    auto mask = static_cast<std::make_unsigned_t<devicemask_t>>(mapped_flags | reserved_flags |
-                                                                launched_flags);
+    auto mask = static_cast<std::make_unsigned_t<devicemask_t>>(
+        mapped_flags | reserved_flags | launched_flags);
     while (mask) {
       const auto device = static_cast<devid_t>(std::countr_zero(mask));
       const devicemask_t device_mask = (1 << device);
@@ -1533,12 +1438,10 @@ public:
       if (launched_flags & device_mask) {
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
+        T4F_INVARIANT(launched_locations.is_invalid(data_id, device));
       }
       mask &= (mask - 1);
     }
-    assert(mapped_locations.get_location_flags(data_id) == 0);
-    assert(reserved_locations.get_location_flags(data_id) == 0);
-    assert(launched_locations.get_location_flags(data_id) == 0);
   }
 
   void finalize(timecount_t current_time) {

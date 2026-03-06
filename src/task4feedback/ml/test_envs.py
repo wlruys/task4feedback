@@ -1,12 +1,13 @@
+from typing import Type
+
 from ..graphs import *
-from ..graphs.jacobi import *
-from ..graphs.dynamic_jacobi import *
 from ..graphs.base import *
-from .env import *
+from ..graphs.dynamic_jacobi import *
+from ..graphs.jacobi import *
 from ..graphs.mesh import *
 from ..graphs.mesh.base import *
 from ..graphs.mesh.partition import *
-from typing import Type
+from .env import *
 
 
 def build_jacobi_graph(config: JacobiConfig, randomize=True) -> JacobiGraph:
@@ -48,7 +49,7 @@ def make_jacobi_env(config: JacobiConfig):
     m.finalize_tasks()
     spec = create_graph_spec()
     input = SimulatorInput(
-        m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
+        m, d, s, transition_conditions=fastsim.HysteresisTransitionConditions(5, 2, 16)
     )
 
     internal_mapper = fastsim.DequeueEFTMapper
@@ -83,7 +84,7 @@ def make_dynamic_jacobi_env(config: DynamicJacobiConfig):
     m.finalize_tasks()
     spec = create_graph_spec()
     input = SimulatorInput(
-        m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
+        m, d, s, transition_conditions=fastsim.HysteresisTransitionConditions(5, 2, 16)
     )
 
     internal_mapper = fastsim.DequeueEFTMapper
@@ -110,8 +111,8 @@ def make_dynamic_jacobi_env(config: DynamicJacobiConfig):
 
 def make_mapper_jacobi_env(
     config: JacobiConfig,
-    external_mapper: Type[ExternalMapper] | ExternalMapper,
-    internal_mapper: Type[fastsim.Mapper] | fastsim.Mapper,
+    external_mapper: type[ExternalMapper] | ExternalMapper,
+    internal_mapper: type[fastsim.Mapper] | fastsim.Mapper,
 ):
     gmsh.initialize()
     s = uniform_connected_devices(5, 1000000000, 1, 2000)

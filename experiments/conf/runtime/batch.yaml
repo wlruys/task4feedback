@@ -1,4 +1,4 @@
-_target_: task4feedback.fastsim2.BatchTransitionConditions
-batch_size: 5
-queue_threshold: 5
-max_in_flight: 16
+_target_: task4feedback.fastsim2.HysteresisTransitionConditions
+open_in_flight: 16
+close_in_flight: 21
+starvation_threshold: 5

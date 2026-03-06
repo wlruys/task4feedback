@@ -7,14 +7,17 @@
 #include <ankerl/unordered_dense.h>
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <limits>
 #include <ostream>
 #include <set>
 #include <span>
 #include <stack>
+#include <stdexcept>
 #include <string>
 #include <tracy/Tracy.hpp>
 #include <type_traits>
@@ -104,18 +107,18 @@ template <typename T> struct CsrData {
   }
 
   [[nodiscard]] std::span<const T> operator[](int32_t row) const {
-    assert(row >= 0);
+    T4F_INVARIANT(row >= 0);
     const auto idx = static_cast<std::size_t>(row);
-    assert(idx + 1 < offsets.size());
+    T4F_INVARIANT(idx + 1 < offsets.size());
     const auto start = static_cast<std::size_t>(offsets[idx]);
     const auto len = static_cast<std::size_t>(offsets[idx + 1] - offsets[idx]);
     return std::span<const T>(elements).subspan(start, len);
   }
 
   [[nodiscard]] int32_t row_size(int32_t row) const {
-    assert(row >= 0);
+    T4F_INVARIANT(row >= 0);
     const auto idx = static_cast<std::size_t>(row);
-    assert(idx + 1 < offsets.size());
+    T4F_INVARIANT(idx + 1 < offsets.size());
     return offsets[idx + 1] - offsets[idx];
   }
 };
@@ -125,9 +128,9 @@ template <typename T> struct CsrView {
   std::span<const T> elements;
 
   [[nodiscard]] std::span<const T> operator[](int32_t row) const {
-    assert(row >= 0);
+    T4F_INVARIANT(row >= 0);
     const auto idx = static_cast<std::size_t>(row);
-    assert(idx + 1 < offsets.size());
+    T4F_INVARIANT(idx + 1 < offsets.size());
     const auto start = static_cast<std::size_t>(offsets[idx]);
     const auto len = static_cast<std::size_t>(offsets[idx + 1] - offsets[idx]);
     return elements.subspan(start, len);
@@ -157,6 +160,15 @@ static inline taskid_t collect_ready(std::span<const taskid_t> neighbors,
 
   out.resize(static_cast<std::size_t>(w));
   return w;
+}
+
+template <typename Int> static inline void append_decimal(std::string &dst, Int value) {
+  static_assert(std::is_integral_v<Int>);
+  constexpr std::size_t kMaxDigits = static_cast<std::size_t>(std::numeric_limits<Int>::digits10) + 3;
+  char buf[kMaxDigits];
+  const auto [ptr, ec] = std::to_chars(buf, buf + kMaxDigits, value);
+  T4F_INVARIANT(ec == std::errc{});
+  dst.append(buf, ptr);
 }
 
 enum class TaskType : uint8_t {
@@ -277,15 +289,18 @@ public:
   std::string name;
   taskid_t compute_task{-1}; // ID of the compute task that produces this data
   dataid_t data_id{-1};      // Unique ID for the data
-  ankerl::unordered_dense::set<taskid_t> dependencies;
-  ankerl::unordered_dense::set<taskid_t> dependents;
-
-  std::vector<taskid_t> sorted_dependencies_cache;
-  std::vector<taskid_t> sorted_dependents_cache;
+  taskid_t dependency{-1}; // optional writer compute task
+  taskid_t dependent{-1};  // optional consumer compute task
 };
 
 class Graph {
 public:
+  struct FinalizeOptions {
+    bool ensure_dependencies{false};
+    bool create_data_tasks{true};
+    bool detect_cycles{true};
+  };
+
   std::vector<Task> tasks;
   std::vector<DataTask> data_tasks;
   std::vector<taskid_t> sorted;
@@ -331,7 +346,7 @@ public:
   }
 
   timecount_t get_time(taskid_t task_id, DeviceType arch) const {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     for (std::size_t i = 0; i < task.arch.size(); i++) {
       if (task.arch[i] == static_cast<uint8_t>(arch)) {
@@ -343,7 +358,7 @@ public:
 
   // Returns a vector of dependency task IDs for the given task
   std::vector<taskid_t> get_task_dependencies(taskid_t task_id) const {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     const auto &deps = tasks[task_id].dependencies;
     return std::vector<taskid_t>(deps.begin(), deps.end());
   }
@@ -359,7 +374,7 @@ public:
   }
 
   void add_read_data(taskid_t task_id, std::vector<dataid_t> &data_ids) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     for (const auto &data_id : data_ids) {
       task.read.insert(data_id);
@@ -367,7 +382,7 @@ public:
   }
 
   void add_write_data(taskid_t task_id, std::vector<dataid_t> &data_ids) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     for (const auto &data_id : data_ids) {
       task.write.insert(data_id);
@@ -375,7 +390,7 @@ public:
   }
 
   void add_retire_data(taskid_t task_id, std::vector<dataid_t> &data_ids) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     for (const auto &data_id : data_ids) {
       task.retire.insert(data_id);
@@ -383,17 +398,17 @@ public:
   }
 
   void set_tag(taskid_t task_id, int32_t tag) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     tasks[task_id].tag = tag;
   }
 
   void set_type(taskid_t task_id, int32_t type) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     tasks[task_id].type = type;
   }
 
   void clear_variants(taskid_t task_id) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     task.arch.clear();
     task.vcu.clear();
@@ -411,7 +426,7 @@ public:
   }
 
   void set_variant(taskid_t task_id, DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
 
     // std::cout << "[Graph] Setting variant for task " << task_id << ": "
@@ -435,27 +450,76 @@ public:
     }
   }
 
-  void populate_dependencies_from_dataflow() {
-    // Dense vector indexed by data_id; -1 = no writer yet.
-    if (max_data_id < 0) return;
-    std::vector<taskid_t> last_writer(static_cast<std::size_t>(max_data_id) + 1, -1);
+  void scan_data_domain_and_counts(std::size_t &total_read_count) {
+    max_data_id = -1;
+    total_read_count = 0;
+    for (const auto &task : tasks) {
+      for (const auto d : task.read) {
+        if (d > max_data_id) max_data_id = d;
+      }
+      for (const auto d : task.write) {
+        if (d > max_data_id) max_data_id = d;
+      }
+      for (const auto d : task.retire) {
+        if (d > max_data_id) max_data_id = d;
+      }
+      total_read_count += task.read.size();
+    }
+  }
+
+  void precompute_sorted_data_vectors() {
     for (auto &task : tasks) {
-      for (const auto data_id : task.read) {
-        const taskid_t w = last_writer[static_cast<std::size_t>(data_id)];
-        if (w != taskid_t(-1)) {
-          add_dependency(task.id, w);
-        }
-      }
-      for (const auto data_id : task.write) {
-        last_writer[static_cast<std::size_t>(data_id)] = task.id;
-      }
+      task.sorted_read_cache = as_sorted_vector(task.read);
+      task.sorted_write_cache = as_sorted_vector(task.write);
+      task.sorted_retire_cache = as_sorted_vector(task.retire);
     }
   }
 
   void populate_dependents() {
     for (auto &task : tasks) {
+      task.dependents.clear();
+    }
+
+    for (auto &task : tasks) {
       for (const auto &dependency_id : task.dependencies) {
         tasks[dependency_id].dependents.insert(task.id);
+      }
+    }
+  }
+
+  void build_compute_dependencies(bool ensure_dependencies = false) {
+    populate_dependents();
+    if (max_data_id < 0) return;
+
+    std::vector<taskid_t> last_writer(static_cast<std::size_t>(max_data_id) + 1, -1);
+    for (auto &task : tasks) {
+      auto add_edge_if_writer_exists = [&](dataid_t data_id) {
+        const taskid_t writer_id = last_writer[static_cast<std::size_t>(data_id)];
+        if (writer_id == taskid_t(-1) || writer_id == task.id) {
+          return;
+        }
+
+        const auto inserted = task.dependencies.insert(writer_id).second;
+        if (inserted) {
+          tasks[writer_id].dependents.insert(task.id);
+        }
+      };
+
+      for (const auto data_id : task.sorted_read_cache) {
+        add_edge_if_writer_exists(data_id);
+      }
+
+      if (ensure_dependencies) {
+        for (const auto data_id : task.sorted_write_cache) {
+          add_edge_if_writer_exists(data_id);
+        }
+        for (const auto data_id : task.sorted_retire_cache) {
+          add_edge_if_writer_exists(data_id);
+        }
+      }
+
+      for (const auto data_id : task.sorted_write_cache) {
+        last_writer[static_cast<std::size_t>(data_id)] = task.id;
       }
     }
   }
@@ -465,23 +529,23 @@ public:
     // Iterate data tasks
     // Update data dependents of the compute tasks based on data dependencies
     for (auto &data_task : data_tasks) {
-      for (const auto &dependency_id : data_task.dependencies) {
-        tasks[dependency_id].data_dependents.insert(data_task.id);
+      if (data_task.dependency != taskid_t(-1)) {
+        tasks[data_task.dependency].data_dependents.insert(data_task.id);
       }
     }
 
     // Compute tasks depend on data tasks
     // Iterate compute tasks
     // Update dependents of the data tasks based on data dependencies
-    for (auto &task : tasks) {
-      for (const auto &data_task_id : task.data_dependencies) {
-        data_tasks[data_task_id].dependents.insert(task.id);
+    for (auto &data_task : data_tasks) {
+      if (data_task.dependent != taskid_t(-1)) {
+        tasks[data_task.dependent].data_dependencies.insert(data_task.id);
       }
     }
   }
 
   void populate_unique_data() {
-    // sorted_read_cache and sorted_write_cache are built by populate_data_dependencies() above.
+    // sorted_read_cache and sorted_write_cache are built by precompute_sorted_data_vectors().
     for (auto &task : tasks) {
       task.unique.clear();
       if (task.sorted_read_cache.empty()) {
@@ -498,11 +562,51 @@ public:
   }
 
   void populate_initial_tasks() {
-    initial_tasks.reserve(INITIAL_TASKS_SIZE);
+    initial_tasks.clear();
+    initial_tasks.reserve(tasks.size());
     for (const auto &task : tasks) {
       if (task.dependencies.empty()) {
         initial_tasks.push_back(task.id);
       }
+    }
+  }
+
+  void build_initial_and_toposort_with_depth(bool detect_cycles = true) {
+    populate_initial_tasks();
+
+    sorted.clear();
+    sorted.reserve(tasks.size());
+
+    std::vector<int32_t> in_degree(tasks.size(), 0);
+    for (auto &task : tasks) {
+      task.depth = 0;
+      in_degree[task.id] = static_cast<int32_t>(task.dependencies.size());
+    }
+
+    std::vector<taskid_t> queue;
+    queue.reserve(tasks.size());
+    queue.insert(queue.end(), initial_tasks.begin(), initial_tasks.end());
+
+    std::size_t head = 0;
+    while (head < queue.size()) {
+      const taskid_t current = queue[head++];
+      sorted.push_back(current);
+
+      const int32_t next_depth = tasks[current].depth + 1;
+      for (const auto dependent : tasks[current].dependents) {
+        auto &dependent_task = tasks[dependent];
+        if (next_depth > dependent_task.depth) {
+          dependent_task.depth = next_depth;
+        }
+        if (--in_degree[dependent] == 0) {
+          queue.push_back(dependent);
+        }
+      }
+    }
+
+    if (detect_cycles && sorted.size() != tasks.size()) {
+      throw std::runtime_error(
+          "Graph::finalize detected a cycle in compute-task dependencies; topological sort is incomplete.");
     }
   }
 
@@ -602,26 +706,8 @@ public:
     }
   }
 
-  void create_data_task(taskid_t task_id, dataid_t data_id, bool has_writer,
-                        taskid_t writer_id = -1) {
-
-    auto &task = tasks[task_id];
-    char buf[48];
-    std::snprintf(buf, sizeof(buf), "%d_data_%d", task_id, data_id);
-    auto data_task_id = add_data_task(std::string(buf), task_id, data_id);
-    auto &data_task = data_tasks[data_task_id];
-
-    if (has_writer) {
-      data_task.dependencies.insert(writer_id);
-      auto &writer_task = tasks[writer_id];
-      writer_task.data_dependents.insert(data_task_id);
-    }
-
-    data_task.dependents.insert(task_id);
-    task.data_dependencies.insert(data_task_id);
-  }
-
-  void populate_data_dependencies(bool ensure_dependencies = false, bool create_data_tasks = true) {
+  void populate_data_dependencies(bool create_data_tasks = true,
+                                  std::size_t total_read_count = 0) {
     const std::size_t sz = (max_data_id >= 0) ? static_cast<std::size_t>(max_data_id) + 1 : 0;
     writers.assign(sz, taskid_t(-1));
     // Per-data generation split by writes.
@@ -629,65 +715,62 @@ public:
     // This makes all reads between two writes share one generation.
     std::vector<uint32_t> write_split_gen_vec(sz, 0);
 
+    for (auto &task : tasks) {
+      task.data_dependencies.clear();
+      task.data_dependents.clear();
+    }
+
+    if (create_data_tasks) {
+      data_tasks.clear();
+      data_tasks.resize(total_read_count);
+    } else {
+      data_tasks.clear();
+    }
+
+    taskid_t next_data_task_id = 0;
     for (auto task_id : sorted) {
 
       auto &task = tasks[task_id];
-
-      task.sorted_read_cache = as_sorted_vector(task.read);
       const auto &sorted_read = task.sorted_read_cache;
+      task.sorted_recent_writer_cache.resize(sorted_read.size());
+      task.sorted_read_gen_cache.resize(sorted_read.size());
 
-      task.sorted_recent_writer_cache.clear();
-      task.sorted_recent_writer_cache.reserve(sorted_read.size());
-      task.sorted_read_gen_cache.clear();
-      task.sorted_read_gen_cache.reserve(sorted_read.size());
-
-      for (const auto data_id : sorted_read) {
+      for (std::size_t i = 0; i < sorted_read.size(); ++i) {
+        const dataid_t data_id = sorted_read[i];
         const taskid_t writer_id = writers[static_cast<std::size_t>(data_id)];
-        const bool has_writer = (writer_id != taskid_t(-1));
-        task.sorted_recent_writer_cache.push_back(writer_id);
-        task.sorted_read_gen_cache.push_back(
-            write_split_gen_vec[static_cast<std::size_t>(data_id)]);
+        task.sorted_recent_writer_cache[i] = writer_id;
+        task.sorted_read_gen_cache[i] = write_split_gen_vec[static_cast<std::size_t>(data_id)];
 
         if (create_data_tasks) {
-          create_data_task(task_id, data_id, has_writer, writer_id);
+          const taskid_t data_task_id = next_data_task_id++;
+          auto &data_task = data_tasks[static_cast<std::size_t>(data_task_id)];
+          data_task.id = data_task_id;
+          data_task.compute_task = task_id;
+          data_task.data_id = data_id;
+
+          if (writer_id != taskid_t(-1)) {
+            data_task.dependency = writer_id;
+            tasks[writer_id].data_dependents.insert(data_task_id);
+          } else {
+            data_task.dependency = taskid_t(-1);
+          }
+
+          data_task.dependent = task_id;
+          task.data_dependencies.insert(data_task_id);
         }
       }
-
-      if (ensure_dependencies) {
-        for (const auto data_id : task.read) {
-          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
-          if (w != taskid_t(-1)) {
-            task.dependencies.insert(w);
-            tasks[w].dependents.insert(task_id);
-          }
-        }
-        for (const auto data_id : task.write) {
-          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
-          if (w != taskid_t(-1)) {
-            task.dependencies.insert(w);
-            tasks[w].dependents.insert(task_id);
-          }
-        }
-        for (const auto data_id : task.retire) {
-          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
-          if (w != taskid_t(-1)) {
-            task.dependencies.insert(w);
-            tasks[w].dependents.insert(task_id);
-          }
-        }
-      }
-
-      task.sorted_write_cache = as_sorted_vector(task.write);
       const auto &sorted_write = task.sorted_write_cache;
-
-      task.sorted_write_gen_cache.clear();
-      task.sorted_write_gen_cache.reserve(sorted_write.size());
-
-      for (const auto data_id : sorted_write) {
+      task.sorted_write_gen_cache.resize(sorted_write.size());
+      for (std::size_t i = 0; i < sorted_write.size(); ++i) {
+        const dataid_t data_id = sorted_write[i];
         const std::size_t idx = static_cast<std::size_t>(data_id);
-        task.sorted_write_gen_cache.push_back(++write_split_gen_vec[idx]);
+        task.sorted_write_gen_cache[i] = ++write_split_gen_vec[idx];
         writers[idx] = task_id;
       }
+    }
+
+    if (create_data_tasks) {
+      T4F_INVARIANT(next_data_task_id == static_cast<taskid_t>(total_read_count));
     }
   }
 
@@ -706,7 +789,6 @@ public:
       task.sorted_dependents_cache = as_sorted_vector(task.dependents);
       task.sorted_data_dependencies_cache = as_sorted_vector(task.data_dependencies);
       task.sorted_data_dependents_cache = as_sorted_vector(task.data_dependents);
-      task.sorted_retire_cache = as_sorted_vector(task.retire);
 
       total_compute_dependencies_cached += static_cast<int32_t>(task.sorted_dependencies_cache.size());
       total_compute_dependents_cached += static_cast<int32_t>(task.sorted_dependents_cache.size());
@@ -721,15 +803,13 @@ public:
     total_data_task_dependencies_cached = 0;
     total_data_task_dependents_cached = 0;
 
-    for (auto &dt : data_tasks) {
-      dt.sorted_dependencies_cache = as_sorted_vector(dt.dependencies);
-      dt.sorted_dependents_cache = as_sorted_vector(dt.dependents);
-      total_data_task_dependencies_cached += static_cast<int32_t>(dt.sorted_dependencies_cache.size());
-      total_data_task_dependents_cached += static_cast<int32_t>(dt.sorted_dependents_cache.size());
+    for (const auto &dt : data_tasks) {
+      total_data_task_dependencies_cached += (dt.dependency != taskid_t(-1)) ? 1 : 0;
+      total_data_task_dependents_cached += (dt.dependent != taskid_t(-1)) ? 1 : 0;
     }
   }
 
-  void finalize(bool ensure_dependencies = false, bool create_data_tasks_flag = true) {
+  void finalize(FinalizeOptions options) {
     if (finalized) {
       std::cerr << "Graph is already finalized. Cannot finalize again." << std::endl;
       std::cerr << "If you want to re-finalize, please create a new Graph instance." << std::endl;
@@ -739,29 +819,27 @@ public:
     }
     finalized = true;
 
-    max_data_id = -1;
     std::size_t total_read_count = 0;
-    for (const auto &task : tasks) {
-      for (const auto d : task.read)   { if (d > max_data_id) max_data_id = d; }
-      for (const auto d : task.write)  { if (d > max_data_id) max_data_id = d; }
-      for (const auto d : task.retire) { if (d > max_data_id) max_data_id = d; }
-      total_read_count += task.read.size();
-    }
-
-    populate_dependencies_from_dataflow();
-    populate_dependents();
-    populate_initial_tasks();
-    bfs();
-    populate_depth();
-
-    if (create_data_tasks_flag) {
-      data_tasks.reserve(total_read_count);
-    }
-
-    populate_data_dependencies(ensure_dependencies, create_data_tasks_flag);
+    scan_data_domain_and_counts(total_read_count);
+    precompute_sorted_data_vectors();
+    build_compute_dependencies(options.ensure_dependencies);
+    build_initial_and_toposort_with_depth(options.detect_cycles);
+    populate_data_dependencies(options.create_data_tasks, total_read_count);
     populate_unique_data();
     build_sorted_dependency_caches();
     // populate_data_dependents();
+  }
+
+  void finalize() {
+    finalize(FinalizeOptions{});
+  }
+
+  void finalize(bool ensure_dependencies, bool create_data_tasks_flag) {
+    finalize(FinalizeOptions{
+        .ensure_dependencies = ensure_dependencies,
+        .create_data_tasks = create_data_tasks_flag,
+        .detect_cycles = true,
+    });
   }
 };
 
@@ -891,7 +969,7 @@ protected:
   std::vector<taskid_t> data_task_compute_task_cache;
 
   std::vector<std::string> compute_task_names;
-  std::vector<std::string> data_task_names;
+  mutable std::vector<std::string> data_task_names;
 
   int32_t grid_h{-1};
   int32_t grid_w{-1};
@@ -984,9 +1062,9 @@ public:
     for (int32_t i = 0; i < num_data_tasks; ++i) {
       const auto &data_task = data_tasks[static_cast<std::size_t>(i)];
       data_task_dependencies.offsets[static_cast<std::size_t>(i) + 1] =
-          static_cast<int32_t>(data_task.sorted_dependencies_cache.size());
+          (data_task.dependency != taskid_t(-1)) ? 1 : 0;
       data_task_dependents.offsets[static_cast<std::size_t>(i) + 1] =
-          static_cast<int32_t>(data_task.sorted_dependents_cache.size());
+          (data_task.dependent != taskid_t(-1)) ? 1 : 0;
     }
 
     auto prefix_sum_offsets = [](std::vector<int32_t> &offsets) {
@@ -1057,14 +1135,15 @@ public:
 
     for (const auto &data_task : data_tasks) {
       const auto idx = static_cast<std::size_t>(data_task.id);
-      data_task_names[idx] = data_task.name;
       data_task_data_id_cache[idx] = data_task.data_id;
       data_task_compute_task_cache[idx] = data_task.compute_task;
 
-      std::copy(data_task.sorted_dependencies_cache.begin(), data_task.sorted_dependencies_cache.end(),
-                data_task_dependencies.elements.begin() + data_task_dependencies.offsets[idx]);
-      std::copy(data_task.sorted_dependents_cache.begin(), data_task.sorted_dependents_cache.end(),
-                data_task_dependents.elements.begin() + data_task_dependents.offsets[idx]);
+      if (data_task.dependency != taskid_t(-1)) {
+        data_task_dependencies.elements[data_task_dependencies.offsets[idx]] = data_task.dependency;
+      }
+      if (data_task.dependent != taskid_t(-1)) {
+        data_task_dependents.elements[data_task_dependents.offsets[idx]] = data_task.dependent;
+      }
     }
 
     build_usage_caches_and_shared_read_topology();
@@ -1299,12 +1378,12 @@ public:
   }
 
   void add_compute_variant(taskid_t id, DeviceType arch, mem_t mem, vcu_t vcu, timecount_t time) {
-    assert(id < compute_task_variant_info.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(id < compute_task_variant_info.size() && "Task ID is out of bounds");
     auto &info = compute_task_variant_info[id];
     uint8_t arch_type = static_cast<uint8_t>(arch);
     info.mask |= arch_type;
     const auto idx = __builtin_ctz(arch_type);
-    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    T4F_INVARIANT(idx < info.variants.size() && "Architecture index out of bounds");
     info.variants[idx] = Variant(arch, vcu, mem, time);
     // std::cout << "[StaticGraph] Added variant for task " << id << ": "
     //           << "Arch=" << to_string(arch) << ", VCU=" << vcu << ", Mem=" << mem
@@ -1413,7 +1492,7 @@ public:
 
   [[nodiscard]] std::span<const taskid_t>
   get_compute_task_shared_read_neighbors(taskid_t id) const {
-    assert(id >= 0 && id < get_n_compute_tasks() && "Task ID is out of bounds");
+    T4F_INVARIANT(id >= 0 && id < get_n_compute_tasks() && "Task ID is out of bounds");
     return compute_task_shared_read_neighbors[id];
   }
 
@@ -1515,7 +1594,7 @@ public:
 
   [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const {
     const auto idx = __builtin_ctz(static_cast<uint8_t>(arch));
-    assert(idx < compute_task_variant_info[id].variants.size() &&
+    T4F_INVARIANT(idx < compute_task_variant_info[id].variants.size() &&
            "Architecture index out of bounds for compute task variants");
     return compute_task_variant_info[id].variants[idx];
   }
@@ -1524,9 +1603,9 @@ public:
     auto &info = compute_task_variant_info[id];
     uint8_t arch_type = static_cast<uint8_t>(arch);
     // assert that mask flag is set for the given architecture
-    assert((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
+    T4F_INVARIANT((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
     const auto idx = __builtin_ctz(arch_type);
-    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    T4F_INVARIANT(idx < info.variants.size() && "Architecture index out of bounds");
     const auto &variant = info.variants[idx];
     return variant.get_resources();
   }
@@ -1535,9 +1614,9 @@ public:
     auto &info = compute_task_variant_info[id];
     uint8_t arch_type = static_cast<uint8_t>(arch);
     // assert that mask flag is set for the given architecture
-    assert((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
+    T4F_INVARIANT((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
     const auto idx = __builtin_ctz(arch_type);
-    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    T4F_INVARIANT(idx < info.variants.size() && "Architecture index out of bounds");
     const auto &variant = info.variants[idx];
     return variant.get_mean_duration();
   }
@@ -1564,7 +1643,19 @@ public:
   }
 
   [[nodiscard]] const std::string &get_data_task_name(taskid_t id) const {
-    return data_task_names[id];
+    const auto idx = static_cast<std::size_t>(id);
+    auto &name = data_task_names[idx];
+    if (name.empty()) {
+      constexpr std::size_t kTaskPrefixReserve =
+          static_cast<std::size_t>(std::numeric_limits<taskid_t>::digits10) + 8;
+      constexpr std::size_t kMaxDataIdChars =
+          static_cast<std::size_t>(std::numeric_limits<dataid_t>::digits10) + 2;
+      name.reserve(kTaskPrefixReserve + kMaxDataIdChars);
+      append_decimal(name, data_task_compute_task_cache[idx]);
+      name.append("_data_");
+      append_decimal(name, data_task_data_id_cache[idx]);
+    }
+    return name;
   }
 
   [[nodiscard]] const dataid_t get_data_id(taskid_t id) const {
@@ -1658,7 +1749,7 @@ protected:
     std::vector<int32_t> launch_priority;
     std::vector<timecount_t> launched_time;
     std::vector<timecount_t> completed_time;
-    std::vector<std::string> names;
+    mutable std::vector<std::string> names;
   };
 
   ComputeRuntimeSoA compute;
@@ -1739,10 +1830,7 @@ public:
     eviction.launch_priority.push_back(0);
     eviction.launched_time.push_back(0);
     eviction.completed_time.push_back(0);
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "EvictionTask_%d_%d_%d", compute_task_id, data_id,
-                  evicting_on_device_id);
-    eviction.names.emplace_back(buf);
+    eviction.names.emplace_back();
     return id;
   }
 
@@ -1865,7 +1953,22 @@ public:
   [[nodiscard]] uint8_t get_data_task_flags(taskid_t id) const { return data.flags[id]; }
 
   [[nodiscard]] const std::string &get_eviction_task_name(taskid_t id) const {
-    return eviction.names[id];
+    const auto idx = static_cast<std::size_t>(id);
+    auto &name = eviction.names[idx];
+    if (name.empty()) {
+      constexpr std::size_t kPrefixLen = 13; // "EvictionTask_"
+      constexpr std::size_t kSepLen = 2;     // two underscores
+      constexpr std::size_t kMaxIntChars =
+          static_cast<std::size_t>(std::numeric_limits<int32_t>::digits10) + 2;
+      name.reserve(kPrefixLen + kSepLen + (3 * kMaxIntChars));
+      name.append("EvictionTask_");
+      append_decimal(name, eviction.compute_task[idx]);
+      name.push_back('_');
+      append_decimal(name, eviction.data_id[idx]);
+      name.push_back('_');
+      append_decimal(name, eviction.evicting_on[idx]);
+    }
+    return name;
   }
   [[nodiscard]] int32_t get_eviction_task_evicting_on(taskid_t id) const {
     return eviction.evicting_on[id];
@@ -2008,7 +2111,7 @@ public:
   bool decrement_compute_task_unmapped(taskid_t id) {
     auto &v = compute.unmapped[id];
     const int16_t nv = --v;
-    assert(nv >= 0 && "Unmapped count cannot be negative");
+    T4F_INVARIANT(nv >= 0 && "Unmapped count cannot be negative");
     if (nv == 0) {
       if (compute.state[id] == CumulativeState::SPAWNED) {
         compute.status[id] |= StatusBits::MAPPABLE;
@@ -2021,7 +2124,7 @@ public:
   bool decrement_compute_task_unreserved(taskid_t id) {
     auto &v = compute.unreserved[id];
     const int16_t nv = --v;
-    assert(nv >= 0 && "Unreserved count cannot be negative");
+    T4F_INVARIANT(nv >= 0 && "Unreserved count cannot be negative");
     if (nv == 0) { // boundary only
       if (compute.state[id] == CumulativeState::MAPPED) {
         compute.status[id] |= StatusBits::RESERVABLE;
@@ -2034,7 +2137,7 @@ public:
   bool decrement_compute_task_incomplete(taskid_t id) {
     auto &v = compute.incomplete[id];
     const int16_t nv = --v;
-    assert(nv >= 0 && "Incomplete count cannot be negative");
+    T4F_INVARIANT(nv >= 0 && "Incomplete count cannot be negative");
     if (nv == 0) { // boundary only
       if (compute.state[id] == CumulativeState::RESERVED) {
         compute.status[id] |= StatusBits::LAUNCHABLE;
@@ -2047,7 +2150,7 @@ public:
   bool decrement_data_task_incomplete(taskid_t id) {
     auto &v = data.incomplete[id];
     const int16_t nv = --v;
-    assert(nv >= 0 && "Data incomplete count cannot be negative");
+    T4F_INVARIANT(nv >= 0 && "Data incomplete count cannot be negative");
     if (nv == 0) { // boundary only
       return data.state[id] == CumulativeState::RESERVED;
     }

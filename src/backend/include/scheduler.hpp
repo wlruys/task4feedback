@@ -14,12 +14,14 @@
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
+#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <random>
+#include <set>
 #include <stack>
 #include <type_traits>
 #include <tracy/Tracy.hpp>
@@ -42,9 +44,10 @@ using DeviceQueue = ActiveQueueIterator<TaskQueue>;
 
 using TaskIDTimeList = std::pair<TaskIDList, std::vector<timecount_t>>;
 
-class TransitionConditions;
-class Scheduler;
 class Mapper;
+class HysteresisTransitionConditions;
+using TransitionConditions = HysteresisTransitionConditions;
+template <typename TransitionConditionT> class SchedulerT;
 
 enum class ExecutionState : int8_t {
   NONE = 0,
@@ -216,7 +219,7 @@ public:
     return eviction_launchable.total_size() > 0;
   }
 
-  friend class Scheduler;
+  template <typename> friend class SchedulerT;
 };
 
 class TaskCountInfo {
@@ -238,9 +241,15 @@ public:
   TaskCountInfo() = default;
 
   TaskCountInfo(std::size_t n_devices)
-      : n_devices(n_devices), per_device_counts(n_devices * n_per_device_counts) {};
+      : n_devices(n_devices), per_device_counts(n_devices * n_per_device_counts),
+        non_host_mapped_counts(n_devices, 0) {
+    if (n_devices > 1) {
+      min_non_host_mapped = 0;
+    }
+  };
 
   void count_mapped(taskid_t task_id, devid_t device_id) {
+    update_non_host_mapped_count(device_id, 1);
     n_active_tasks += 1;
     n_mapped_tasks += 1;
     per_device_counts[mapped_offset * n_devices + device_id] += 1;
@@ -256,6 +265,7 @@ public:
   }
 
   void count_completed(taskid_t task_id, devid_t device_id) {
+    update_non_host_mapped_count(device_id, -1);
     n_active_tasks -= 1;
     n_mapped_tasks -= 1;
     n_reserved_tasks -= 1;
@@ -343,6 +353,13 @@ public:
     return per_device_counts[mapped_offset * n_devices + device_id];
   }
 
+  [[nodiscard]] bool any_non_host_mapped_below(precision_t threshold) const {
+    if (threshold <= 0 || n_devices <= 1) {
+      return false;
+    }
+    return min_non_host_mapped < threshold;
+  }
+
   [[nodiscard]] auto n_reserved(devid_t device_id) const {
     return per_device_counts[reserved_offset * n_devices + device_id];
   }
@@ -370,6 +387,40 @@ protected:
   precision_t n_completed_tasks{};
   precision_t n_data_completed_tasks{};
   std::vector<precision_t> per_device_counts{};
+  std::vector<precision_t> non_host_mapped_counts{};
+  precision_t min_non_host_mapped{std::numeric_limits<precision_t>::max()};
+
+  void recompute_min_non_host_mapped() {
+    if (n_devices <= 1) {
+      min_non_host_mapped = std::numeric_limits<precision_t>::max();
+      return;
+    }
+
+    precision_t min_val = non_host_mapped_counts[1];
+    for (precision_t device_id = 2; device_id < n_devices; ++device_id) {
+      min_val = std::min(min_val, non_host_mapped_counts[device_id]);
+    }
+    min_non_host_mapped = min_val;
+  }
+
+  void update_non_host_mapped_count(devid_t device_id, precision_t delta) {
+    if (device_id <= 0) {
+      return;
+    }
+
+    const precision_t offset = mapped_offset * n_devices + device_id;
+    const precision_t old_count = per_device_counts[offset];
+    const precision_t new_count = old_count + delta;
+    non_host_mapped_counts[device_id] = new_count;
+
+    if (new_count < min_non_host_mapped) {
+      min_non_host_mapped = new_count;
+      return;
+    }
+    if (old_count == min_non_host_mapped && new_count > old_count) {
+      recompute_min_non_host_mapped();
+    }
+  }
 };
 
 class TaskCostInfo {
@@ -425,48 +476,38 @@ struct ResourceRequest {
   Resources missing{0, 0};
 };
 
-struct SchedulerInput {
+template <typename TransitionConditionT = TransitionConditions>
+struct SchedulerInputT {
   std::reference_wrapper<Graph> graph;
   std::reference_wrapper<StaticTaskInfo> tasks;
   std::reference_wrapper<Data> data;
   std::reference_wrapper<Devices> devices;
   std::reference_wrapper<Topology> topology;
   std::reference_wrapper<TaskNoise> task_noise;
-  std::reference_wrapper<TransitionConditions> conditions;
+  TransitionConditionT conditions{};
   int32_t top_k_candidates = 0;
 
-  SchedulerInput(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
-                 Topology &topology, TaskNoise &task_noise, TransitionConditions &conditions,
-                 int32_t top_k_candidates = 1)
+  SchedulerInputT(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
+                  Topology &topology, TaskNoise &task_noise, int32_t top_k_candidates = 1)
+      : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
+        task_noise(task_noise), top_k_candidates(top_k_candidates) {
+  }
+
+  SchedulerInputT(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
+                  Topology &topology, TaskNoise &task_noise,
+                  const TransitionConditionT &conditions, int32_t top_k_candidates = 1)
       : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
         task_noise(task_noise), conditions(conditions), top_k_candidates(top_k_candidates) {
   }
 
-  SchedulerInput(const SchedulerInput &other) = default;
+  SchedulerInputT(const SchedulerInputT &other) = default;
 
-  SchedulerInput &operator=(const SchedulerInput &other) = default;
-
-  // Shallow copy constructor
-  SchedulerInput(SchedulerInput &&other) noexcept
-      : graph(other.graph), tasks(other.tasks), data(other.data), devices(other.devices),
-        topology(other.topology), task_noise(other.task_noise), conditions(other.conditions),
-        top_k_candidates(other.top_k_candidates) {
-  }
-
-  SchedulerInput &operator=(SchedulerInput &&other) noexcept {
-    if (this != &other) {
-      graph = other.graph;
-      tasks = other.tasks;
-      data = other.data;
-      devices = other.devices;
-      topology = other.topology;
-      task_noise = other.task_noise;
-      conditions = other.conditions;
-      top_k_candidates = other.top_k_candidates;
-    }
-    return *this;
-  }
+  SchedulerInputT &operator=(const SchedulerInputT &other) = default;
+  SchedulerInputT(SchedulerInputT &&other) noexcept = default;
+  SchedulerInputT &operator=(SchedulerInputT &&other) noexcept = default;
 };
+
+using SchedulerInput = SchedulerInputT<TransitionConditions>;
 
 class SchedulerState {
 protected:
@@ -552,7 +593,8 @@ public:
   TaskCostInfo costs;
   uint8_t flags = 0;
 
-  SchedulerState(SchedulerInput &input)
+  template <typename TransitionConditionT>
+  SchedulerState(SchedulerInputT<TransitionConditionT> &input)
       : global_time(0), graph(input.graph), tasks(input.tasks), data(input.data),
         devices(input.devices), topology(input.topology), task_noise(input.task_noise),
         task_runtime(RuntimeTaskInfo(input.tasks)), device_manager(DeviceManager(input.devices)),
@@ -612,10 +654,12 @@ public:
 
   void start_record() {
     flags |= RECORD_FLAG;
+    device_manager.start_record();
   }
 
   void stop_record() {
     flags &= ~RECORD_FLAG;
+    device_manager.stop_record();
   }
 
   [[nodiscard]] bool is_recording() const {
@@ -632,8 +676,8 @@ public:
 
   void update_time(timecount_t time) {
     global_time = std::max(global_time, time);
-    assert(time >= global_time);
-    assert(global_time >= 0);
+    T4F_INVARIANT(time >= global_time);
+    T4F_INVARIANT(global_time >= 0);
   }
 
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = true) {
@@ -830,7 +874,7 @@ public:
   }
 
   [[nodiscard]] timecount_t get_global_time() const {
-    assert(global_time >= 0);
+    T4F_INVARIANT(global_time >= 0);
     return global_time;
   }
 
@@ -906,7 +950,7 @@ public:
     return data_manager;
   }
 
-  friend class Scheduler;
+  template <typename> friend class SchedulerT;
   friend class TransitionConstraints;
 };
 
@@ -919,44 +963,41 @@ concept TransitionConditionConcept = requires(T t, SchedulerState &state, Schedu
   { t.should_launch_data(state, queues) } -> std::convertible_to<bool>;
 };
 
-class TransitionConditions {
+class TransitionConditionBase {
 public:
-  virtual bool should_map(SchedulerState &state, SchedulerQueues &queues) {
+  bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+  bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+    return should_map(state, queues);
+  }
+
+  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
+  bool should_launch(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_launch(SchedulerState &state, SchedulerQueues &queues) {
+  bool should_launch_data(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_launch_data(SchedulerState &state, SchedulerQueues &queues) {
-    MONUnusedParameter(state);
-    MONUnusedParameter(queues);
-    return true;
-  }
 };
 
-static_assert(TransitionConditionConcept<TransitionConditions>);
+class DefaultTransitionConditions : public TransitionConditionBase {};
 
-class DefaultTransitionConditions : public TransitionConditions {};
-
-class RangeTransitionConditions : public TransitionConditions {
+class RangeTransitionConditions : public TransitionConditionBase {
 public:
   int32_t mapped_reserved_gap = 1;
   int32_t reserved_launched_gap = 1;
@@ -968,63 +1009,76 @@ public:
         total_in_flight(total_in_flight_) {
   }
 
-  bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
+  bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(queues);
     auto n_mapped = state.counts.n_mapped();
     auto n_reserved = state.counts.n_reserved();
-    assert(n_mapped >= n_reserved);
+    T4F_INVARIANT(n_mapped >= n_reserved);
     return ((n_mapped - n_reserved) <= mapped_reserved_gap) && (n_mapped <= total_in_flight);
   }
 
-  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) override {
+  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(queues);
     auto n_reserved = state.counts.n_reserved();
     auto n_launched = state.counts.n_launched();
-    assert(n_reserved >= n_launched);
+    T4F_INVARIANT(n_reserved >= n_launched);
     return (n_reserved - n_launched) <= reserved_launched_gap;
   }
+
+  bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+    return should_map(state, queues);
+  }
 };
 
-class BatchTransitionConditions : public TransitionConditions {
+class HysteresisTransitionConditions : public TransitionConditionBase {
 public:
-  timecount_t last_accessed = 0;
-  int32_t batch_size = 20;
-  int32_t queue_threshold = 2;
-  int32_t max_in_flight = 16;
-  int32_t active_batch = 0;
+  HysteresisTransitionConditions() = default;
+  timecount_t last_window_opened = 0;
+  int32_t open_in_flight = 16;
+  int32_t close_in_flight = 36;
+  int32_t starvation_threshold = 2;
+  bool window_open = false;
 
-  BatchTransitionConditions(int32_t batch_size_, int32_t queue_threshold_, int32_t max_in_flight_)
-      : batch_size(batch_size_), queue_threshold(queue_threshold_), max_in_flight(max_in_flight_) {
+  HysteresisTransitionConditions(int32_t open_in_flight_, int32_t close_in_flight_,
+                                 int32_t starvation_threshold_)
+      : open_in_flight(open_in_flight_),
+        close_in_flight(std::max(close_in_flight_, open_in_flight_)),
+        starvation_threshold(starvation_threshold_) {
   }
 
-  bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
+  bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(queues);
     auto &counts = state.counts;
-    auto n_mapped = counts.n_mapped();
-    bool space_flag = (n_mapped <= max_in_flight + active_batch);
-    bool workqueue_flag = false;
-    const devid_t n_devices = state.get_devices().size();
-    for (int i = 1; i < n_devices; i++) {
-      if (counts.n_mapped(i) < queue_threshold) {
-        workqueue_flag = true;
-        break;
-      }
+    const auto n_mapped = counts.n_mapped();
+    const bool starved = counts.any_non_host_mapped_below(starvation_threshold);
+
+    if (!window_open) {
+      return (n_mapped <= open_in_flight) || starved;
     }
 
-    bool flag = space_flag || workqueue_flag;
+    return !(n_mapped >= close_in_flight && !starved);
+  }
 
-    if (flag) {
-      if (active_batch == 0) {
-        last_accessed = state.get_global_time();
-        active_batch = batch_size;
-      }
-    } else {
-      active_batch = 0;
+  bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+    MONUnusedParameter(queues);
+    auto &counts = state.counts;
+    const auto n_mapped = counts.n_mapped();
+    const bool starved = counts.any_non_host_mapped_below(starvation_threshold);
+    const bool open_condition = (n_mapped <= open_in_flight) || starved;
+    const bool close_condition = (n_mapped >= close_in_flight) && !starved;
+
+    if (!window_open && open_condition) {
+      window_open = true;
+      last_window_opened = state.get_global_time();
+    } else if (window_open && close_condition) {
+      window_open = false;
     }
 
-    return flag;
+    return should_map(state, queues);
   }
 };
+
+static_assert(TransitionConditionConcept<TransitionConditions>);
 
 // struct SuccessPair {
 //   bool success = false;
@@ -1037,7 +1091,9 @@ enum class EvictionState : int8_t {
   RUNNING = 4,
 };
 
-class Scheduler {
+template <typename TransitionConditionT = TransitionConditions>
+class SchedulerT {
+  static_assert(TransitionConditionConcept<TransitionConditionT>);
 
 protected:
   struct EvictionInvalidationInfo {
@@ -1068,11 +1124,11 @@ public:
   TaskIDList compute_task_buffer;
   TaskIDList data_task_buffer;
   TaskIDList python_mapper_buffer;
-  std::reference_wrapper<TransitionConditions> conditions;
+  TransitionConditionT conditions;
   int64_t scheduler_event_count = 1;
   bool initialized = false;
 
-  Scheduler(SchedulerInput &input)
+  SchedulerT(SchedulerInputT<TransitionConditionT> &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
@@ -1084,9 +1140,9 @@ public:
     }
   }
 
-  Scheduler(const Scheduler &other) = default;
+  SchedulerT(const SchedulerT &other) = default;
 
-  void set_transition_conditions(TransitionConditions &conditions_) {
+  void set_transition_conditions(const TransitionConditionT &conditions_) {
     conditions = conditions_;
   }
 
@@ -1133,7 +1189,8 @@ public:
 
   taskid_t map_task(taskid_t task_id, Action &action);
   void skip_map_tasks(MapperEvent &map_event, EventManager &event_manager);
-  void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper);
+  void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper,
+                 bool prechecked = false);
   ExecutionState map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
   void remove_mapped_tasks(ActionList &action_list);
 
@@ -1277,6 +1334,8 @@ public:
   friend class SchedulerState;
   friend class SchedulerQueues;
 };
+
+using Scheduler = SchedulerT<TransitionConditions>;
 
 class Mapper {
 
@@ -1445,9 +1504,9 @@ public:
       lp = launching_priorities.at(compute_task_id % launching_priorities.size());
     }
 
-    assert(state.get_tasks().is_architecture_supported(compute_task_id,
+    T4F_INVARIANT(state.get_tasks().is_architecture_supported(compute_task_id,
                                                        state.get_devices().get_type(device_id)));
-    assert(device_id < state.get_devices().size());
+    T4F_INVARIANT(device_id < state.get_devices().size());
 
     return Action(0, device_id, rp, lp);
   }
@@ -1522,7 +1581,7 @@ public:
     const mem_t data_size = state.get_data().get_size(data_id);
     SourceRequest req =
         communication_manager.get_best_source(topology, destination, location_flags);
-    assert(req.found);
+    T4F_INVARIANT(req.found);
     return communication_manager.ideal_time_to_transfer(topology, data_size, req.source,
                                                         destination);
   }
@@ -1554,7 +1613,7 @@ public:
 
   DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
     fill_device_targets(task_id, state);
-    assert(!device_buffer.empty());
+    T4F_INVARIANT(!device_buffer.empty());
     const timecount_t dep_time = get_dependency_finish_time(task_id, state);
 
     auto min_time = MAX_TIME;

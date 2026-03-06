@@ -77,52 +77,52 @@ public:
   T &operator[](int index) { return arr[index]; }
 
   void remove_at(int index) {
-    assert(index >= 0 && index < static_cast<int>(l));
+    T4F_INVARIANT(index >= 0 && index < static_cast<int>(l));
     std::move(arr.begin() + index + 1, arr.begin() + l, arr.begin() + index);
     l--;
   }
 
   void erase(T *it) {
-    assert(it >= arr.data() && it < arr.data() + l);
+    T4F_INVARIANT(it >= arr.data() && it < arr.data() + l);
     std::move(it + 1, arr.data() + l, it);
     l--;
   }
 
   void insert(T *it, T val) {
-    assert(l < s);
+    T4F_INVARIANT(l < s);
     std::move_backward(it, arr.data() + l, arr.data() + l + 1);
     *it = std::move(val);
     l++;
   }
 
   void insert_at(int index, T val) {
-    assert(l < s);
-    assert(index >= 0 && index <= static_cast<int>(l));
+    T4F_INVARIANT(l < s);
+    T4F_INVARIANT(index >= 0 && index <= static_cast<int>(l));
     std::move_backward(arr.begin() + index, arr.begin() + l, arr.begin() + l + 1);
     arr[index] = std::move(val);
     l++;
   }
 
   void push_back(T val) {
-    assert(l < s);
+    T4F_INVARIANT(l < s);
     arr[l++] = std::move(val);
   }
 
   void pop_back() {
-    assert(l > 0);
+    T4F_INVARIANT(l > 0);
     l--;
   }
 
   [[nodiscard]] std::size_t size() const noexcept { return l; }
 
   void pop_front() {
-    assert(l > 0);
+    T4F_INVARIANT(l > 0);
     std::move(arr.begin() + 1, arr.begin() + l, arr.begin());
     l--;
   }
 
   void push_front(T val) {
-    assert(l < s);
+    T4F_INVARIANT(l < s);
     std::move_backward(arr.begin(), arr.begin() + l, arr.begin() + l + 1);
     arr[0] = std::move(val);
     l++;
@@ -342,6 +342,11 @@ public:
     return top_k_values;
   }
 
+  template <typename QT = QueueType> requires TopKLike<QT>
+  [[nodiscard]] const auto &top_k_view() const {
+    return pq.get_top_k();
+  }
+
   void set_k(int k_val) {
     if constexpr (HasDynamicK<QueueType>) pq.set_k(k_val);
     else (void)k_val;
@@ -388,7 +393,7 @@ public:
   }
 
   void pop() {
-    assert(!top_k.empty() && "pop() called on an empty queue");
+    T4F_INVARIANT(!top_k.empty() && "pop() called on an empty queue");
     top_k.erase(top_k.begin());
 
     if (!remaining_min_heap.empty()) {
@@ -399,19 +404,19 @@ public:
   }
 
   [[nodiscard]] const T &top() const {
-    assert(!top_k.empty() && "top() called on an empty queue");
+    T4F_INVARIANT(!top_k.empty() && "top() called on an empty queue");
     return top_k.front();
   }
 
   T &top() { return const_cast<T &>(std::as_const(*this).top()); }
 
   T &at(std::size_t i) {
-    assert(i < top_k.size() && "at() index out of range");
+    T4F_INVARIANT(i < top_k.size() && "at() index out of range");
     return top_k[i];
   }
 
   void remove_at(std::size_t i) {
-    assert(i < top_k.size() && "remove_at() index out of range");
+    T4F_INVARIANT(i < top_k.size() && "remove_at() index out of range");
     top_k.erase(top_k.begin() + i);
 
     if (!remaining_min_heap.empty()) {
@@ -494,7 +499,7 @@ public:
   }
 
   void pop() {
-    assert(!top_k.empty() && "pop() called on an empty DynamicTopKQueue");
+    T4F_INVARIANT(!top_k.empty() && "pop() called on an empty DynamicTopKQueue");
     top_k.erase(top_k.begin());
     if (!remaining_min_heap.empty()) {
       T v = remaining_min_heap.top();
@@ -504,19 +509,19 @@ public:
   }
 
   [[nodiscard]] const T &top() const {
-    assert(!top_k.empty() && "top() called on an empty DynamicTopKQueue");
+    T4F_INVARIANT(!top_k.empty() && "top() called on an empty DynamicTopKQueue");
     return top_k.front();
   }
 
   T &top() { return const_cast<T &>(std::as_const(*this).top()); }
 
   T &at(std::size_t i) {
-    assert(i < top_k.size() && "at() index out of range");
+    T4F_INVARIANT(i < top_k.size() && "at() index out of range");
     return top_k[i];
   }
 
   void remove_at(std::size_t i) {
-    assert(i < top_k.size() && "remove_at() index out of range");
+    T4F_INVARIANT(i < top_k.size() && "remove_at() index out of range");
     top_k.erase(top_k.begin() + i);
     if (!remaining_min_heap.empty()) {
       T v = remaining_min_heap.top();

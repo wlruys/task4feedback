@@ -27,7 +27,7 @@ public:
   ActiveIterator() = default;
   ActiveIterator(std::size_t num_containers)
       : containers(num_containers), n_devices(static_cast<uint32_t>(num_containers)) {
-    assert(num_containers <= 64);
+    T4F_INVARIANT(num_containers <= 64);
     viable_mask = all_viable_mask();
   }
 
@@ -63,6 +63,7 @@ public:
 
   void deactivate(uint32_t index) noexcept { viable_mask &= ~(1ULL << index); }
   void deactivate() noexcept { viable_mask &= ~(1ULL << active_index); }
+  void deactivate_mask(uint64_t mask) noexcept { viable_mask &= ~mask; }
   void activate(std::size_t index) noexcept { viable_mask |= (1ULL << index); }
   void activate() noexcept { viable_mask |= (1ULL << active_index); }
 
@@ -166,7 +167,7 @@ public:
 
   void pop() noexcept {
     auto &container = this->containers[this->active_index];
-    assert(!container.empty());
+    T4F_INVARIANT(!container.empty());
     container.pop();
     this->element_count--;
     if (container.empty()) {

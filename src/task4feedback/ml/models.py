@@ -1,47 +1,46 @@
-from task4feedback import fastsim2 as fastsim
-from task4feedback.interface import *
-import torch
-from typing import Optional, Self
-
-from torchrl.envs import EnvBase
-from task4feedback.interface.wrappers import observation_to_heterodata, observation_to_heterodata_truncate
+import math
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import List, Optional, Self, Tuple
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List, Sequence
-from torch_geometric.nn.norm import GraphNorm, MessageNorm
+from hydra.utils import call, instantiate
+from omegaconf import DictConfig, OmegaConf
+from tensordict import TensorDict
 
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
 # )
 from torch import Tensor
-from torch_geometric.data import HeteroData
-from torch_geometric.nn import HeteroConv, SAGEConv, Linear
 from torch.profiler import record_function
-
-from tensordict import TensorDict
-from torch_geometric.data import HeteroData, Batch
-import torch.nn as nn
+from torch_geometric.data import Batch, HeteroData
 from torch_geometric.nn import (
-    GATv2Conv,
-    GATConv,
-    GraphConv,
-    GCNConv,
-    SimpleConv,
     EdgeConv,
-    global_mean_pool,
-    global_add_pool,
-    SAGPooling,
+    GATConv,
+    GATv2Conv,
+    GCNConv,
+    GraphConv,
     HeteroConv,
+    Linear,
     SAGEConv,
+    SAGPooling,
+    SimpleConv,
+    global_add_pool,
+    global_mean_pool,
 )
-import numpy as np
-import time
-import torch.nn.functional as F
-import math
-from hydra.utils import instantiate, call
-from omegaconf import DictConfig, OmegaConf
+from torch_geometric.nn.norm import GraphNorm, MessageNorm
+
+from task4feedback import fastsim2 as fastsim
+from task4feedback.interface import *
+from task4feedback.interface.wrappers import (
+    observation_to_heterodata,
+    observation_to_heterodata_truncate,
+)
+from torchrl.envs import EnvBase
 
 
 def kaiming_init(layer, a=0.01, mode="fan_in", nonlinearity="leaky_relu"):
@@ -49,12 +48,10 @@ def kaiming_init(layer, a=0.01, mode="fan_in", nonlinearity="leaky_relu"):
     Initializes a layer with Kaiming He initialization.
     """
     print(f"Initializing layer {layer} with Kaiming He initialization")
-    if isinstance(layer, nn.Linear):
-        nn.init.kaiming_uniform_(layer.weight, a=a, mode=mode, nonlinearity=nonlinearity)
-        if layer.bias is not None:
-            nn.init.constant_(layer.bias, 0.0)
-    elif isinstance(layer, nn.Conv2d):
-        nn.init.kaiming_uniform_(layer.weight, a=a, mode=mode, nonlinearity=nonlinearity)
+    if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv2d):
+        nn.init.kaiming_uniform_(
+            layer.weight, a=a, mode=mode, nonlinearity=nonlinearity
+        )
         if layer.bias is not None:
             nn.init.constant_(layer.bias, 0.0)
     return layer
@@ -65,11 +62,7 @@ def xavier_init(layer, gain=1.0):
     Initializes a layer with Xavier initialization.
     """
     print(f"Initializing layer {layer} with Xavier initialization")
-    if isinstance(layer, nn.Linear):
-        nn.init.xavier_uniform_(layer.weight, gain=gain)
-        if layer.bias is not None:
-            nn.init.constant_(layer.bias, 0.0)
-    elif isinstance(layer, nn.Conv2d):
+    if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv2d):
         nn.init.xavier_uniform_(layer.weight, gain=gain)
         if layer.bias is not None:
             nn.init.constant_(layer.bias, 0.0)
@@ -81,11 +74,7 @@ def orthogonal_init(layer, gain=1.0):
     Initializes a layer with orthogonal initialization.
     """
     print(f"Initializing layer {layer} with Orthogonal initialization")
-    if isinstance(layer, nn.Linear):
-        nn.init.orthogonal_(layer.weight, gain=gain)
-        if layer.bias is not None:
-            nn.init.constant_(layer.bias, 0.0)
-    elif isinstance(layer, nn.Conv2d):
+    if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv2d):
         nn.init.orthogonal_(layer.weight, gain=gain)
         if layer.bias is not None:
             nn.init.constant_(layer.bias, 0.0)
@@ -102,7 +91,7 @@ def init_weights(m):
 
 
 class BatchWrapper(nn.Module):
-    def __init__(self, network: nn.Module, device: Optional[str] = "cpu"):
+    def __init__(self, network: nn.Module, device: str | None = "cpu"):
         super(BatchWrapper, self).__init__()
         self.network = network
 
@@ -113,7 +102,9 @@ class BatchWrapper(nn.Module):
             return False
         return True
 
-    def _convert_to_heterodata(self, obs: TensorDict, is_batch: bool = False) -> HeteroData | Batch:
+    def _convert_to_heterodata(
+        self, obs: TensorDict, is_batch: bool = False
+    ) -> HeteroData | Batch:
         if not is_batch:
             return obs["hetero_data"]
 
@@ -145,7 +136,7 @@ class BatchWrapper(nn.Module):
 
 
 class HeteroDataWrapper(nn.Module):
-    def __init__(self, device: Optional[str] = "cpu"):
+    def __init__(self, device: str | None = "cpu"):
         super(HeteroDataWrapper, self).__init__()
 
         self.register_parameter("dummy_param_0", nn.Parameter(torch.randn(1)))
@@ -159,7 +150,7 @@ class HeteroDataWrapper(nn.Module):
         self,
         obs: TensorDict,
         is_batch: bool = False,
-        actions: Optional[TensorDict] = None,
+        actions: TensorDict | None = None,
     ) -> HeteroData:
         is_cuda = any(p.is_cuda for p in self.parameters())
 
@@ -202,7 +193,7 @@ class HeteroDataWrapper(nn.Module):
 
         return batch_obs
 
-    def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
+    def forward(self, obs: TensorDict, actions: TensorDict | None = None):
         is_batch = self._is_batch(obs)
 
         with torch.no_grad():
@@ -243,10 +234,18 @@ class FeatureDimConfig:
         return FeatureDimConfig(
             task_feature_dim=overrides.get("task_feature_dim", other.task_feature_dim),
             data_feature_dim=overrides.get("data_feature_dim", other.data_feature_dim),
-            device_feature_dim=overrides.get("device_feature_dim", other.device_feature_dim),
-            task_data_edge_dim=overrides.get("task_data_edge_dim", other.task_data_edge_dim),
-            task_device_edge_dim=overrides.get("task_device_edge_dim", other.task_device_edge_dim),
-            task_task_edge_dim=overrides.get("task_task_edge_dim", other.task_task_edge_dim),
+            device_feature_dim=overrides.get(
+                "device_feature_dim", other.device_feature_dim
+            ),
+            task_data_edge_dim=overrides.get(
+                "task_data_edge_dim", other.task_data_edge_dim
+            ),
+            task_device_edge_dim=overrides.get(
+                "task_device_edge_dim", other.task_device_edge_dim
+            ),
+            task_task_edge_dim=overrides.get(
+                "task_task_edge_dim", other.task_task_edge_dim
+            ),
         )
 
 
@@ -254,13 +253,21 @@ class FeatureDimConfig:
 class LayerConfig:
     hidden_channels: int = 16
     n_heads: int = 1
-    input_dim: Optional[int] = None
-    output_dim: Optional[int] = None
+    input_dim: int | None = None
+    output_dim: int | None = None
 
 
 class OutputHead(nn.Module):
     def __init__(
-        self, input_dim: int, hidden_channels: int, output_dim: int, activation: DictConfig = None, initialization: DictConfig = None, layer_norm: bool = True, debug: bool = False, **_ignored
+        self,
+        input_dim: int,
+        hidden_channels: int,
+        output_dim: int,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        layer_norm: bool = True,
+        debug: bool = False,
+        **_ignored,
     ):
         super(OutputHead, self).__init__()
         self.debug = debug
@@ -275,7 +282,9 @@ class OutputHead(nn.Module):
         layers.append(layer1_init(nn.Linear(input_dim, hidden_channels)))
         if layer_norm:
             layers.append(nn.LayerNorm(hidden_channels))
-        layers.append(instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01))
+        layers.append(
+            instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01)
+        )
         layers.append(layer2_init(nn.Linear(hidden_channels, output_dim)))
         self.network = nn.Sequential(*layers)
 
@@ -291,7 +300,7 @@ class LogitStabilizer(nn.Module):
         init_tau: float = 2.0,
         learnable: bool = True,
         min_tau: float = 1.0,
-        max_tau: Optional[float] = None,
+        max_tau: float | None = None,
     ):
         super().__init__()
         if min_tau <= 0:
@@ -300,7 +309,9 @@ class LogitStabilizer(nn.Module):
             raise ValueError("max_tau must be None or > min_tau")
         self.min_tau = float(min_tau)
         self.max_tau = float(max_tau) if max_tau is not None else None
-        self.log_tau = nn.Parameter(torch.tensor(float(init_tau)).log(), requires_grad=learnable)
+        self.log_tau = nn.Parameter(
+            torch.tensor(float(init_tau)).log(), requires_grad=learnable
+        )
 
     @property
     def tau(self) -> torch.Tensor:
@@ -327,10 +338,18 @@ class LogitsOutputHead(OutputHead):
         activation: DictConfig = None,
         initialization: DictConfig = None,
         layer_norm: bool = True,
-        logit_stabilizer: Optional[LogitStabilizer] = None,
+        logit_stabilizer: LogitStabilizer | None = None,
         debug: bool = False,
     ):
-        super(LogitsOutputHead, self).__init__(input_dim, hidden_channels, output_dim, activation=activation, initialization=initialization, layer_norm=layer_norm, debug=debug)
+        super(LogitsOutputHead, self).__init__(
+            input_dim,
+            hidden_channels,
+            output_dim,
+            activation=activation,
+            initialization=initialization,
+            layer_norm=layer_norm,
+            debug=debug,
+        )
         if logit_stabilizer is None:
             self.logit_stabilizer = LogitStabilizer()
         else:
@@ -361,7 +380,6 @@ class PolicyOutputHead(OutputHead):
 
 
 class VectorStateNet(nn.Module):
-
     def __init__(
         self,
         feature_config: FeatureDimConfig,
@@ -383,7 +401,11 @@ class VectorStateNet(nn.Module):
         self.add_device_load = bool(add_device_load)
 
         def make_activation(activation_config):
-            return instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01)
+            return (
+                instantiate(activation)
+                if activation
+                else nn.LeakyReLU(negative_slope=0.01)
+            )
 
         layer_init = call(initialization if initialization else kaiming_init)
         input_dim = feature_config.task_feature_dim
@@ -431,11 +453,15 @@ class VectorStateNet(nn.Module):
         if self.add_progress:
             time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
             progress_feature = tensordict["aux", "progress"]
-            task_features = torch.cat([task_features, time_feature, progress_feature], dim=-1)
+            task_features = torch.cat(
+                [task_features, time_feature, progress_feature], dim=-1
+            )
         if self.add_device_load:
             device_load = tensordict["aux", "device_load"]
             device_memory = tensordict["aux", "device_memory"]
-            task_features = torch.cat([task_features, device_load, device_memory], dim=-1)
+            task_features = torch.cat(
+                [task_features, device_load, device_memory], dim=-1
+            )
 
         task_activations = self.layers(task_features)
 
@@ -467,11 +493,22 @@ def _tiny_last_linear(seq: nn.Sequential, std: float = 1e-4):
 
 
 class _FiLM(nn.Module):
-    def __init__(self, node_types: List[str], num_layers: int, cond_dim: int, hidden_dim: int):
+    def __init__(
+        self, node_types: list[str], num_layers: int, cond_dim: int, hidden_dim: int
+    ):
         super().__init__()
         self.mod = nn.ModuleDict(
             {
-                nt: nn.ModuleList([nn.Sequential(nn.Linear(cond_dim, max(64, hidden_dim // 2)), nn.SiLU(), nn.Linear(max(64, hidden_dim // 2), 2 * hidden_dim)) for _ in range(num_layers)])
+                nt: nn.ModuleList(
+                    [
+                        nn.Sequential(
+                            nn.Linear(cond_dim, max(64, hidden_dim // 2)),
+                            nn.SiLU(),
+                            nn.Linear(max(64, hidden_dim // 2), 2 * hidden_dim),
+                        )
+                        for _ in range(num_layers)
+                    ]
+                )
                 for nt in node_types
             }
         )
@@ -500,7 +537,9 @@ class _FiLM(nn.Module):
                 b_nodes = beta[0].expand_as(x)
             else:
                 if b.max().item() >= B:
-                    raise ValueError("Global vector batch size mismatches node batch indices.")
+                    raise ValueError(
+                        "Global vector batch size mismatches node batch indices."
+                    )
                 g_nodes = gamma.index_select(0, b)
                 b_nodes = beta.index_select(0, b)
             out[nt] = (g_nodes) * x + b_nodes
@@ -508,14 +547,22 @@ class _FiLM(nn.Module):
 
 
 class GATStateNet(nn.Module):
-
     def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
         mask = edge_mask.to(torch.bool)
         edge_index_masked = edge_index[:, mask]
         edge_attr_masked = edge_attr[mask] if edge_attr is not None else None
         return edge_index_masked, edge_attr_masked
 
-    def __init__(self, feature_config: FeatureDimConfig, hidden_channels: int = 16, num_layers: int = 2, add_device_load: bool = False, add_progress: bool = False, n_devices: int = 5, **_ignored):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: int = 16,
+        num_layers: int = 2,
+        add_device_load: bool = False,
+        add_progress: bool = False,
+        n_devices: int = 5,
+        **_ignored,
+    ):
         super(GATStateNet, self).__init__()
         self.feature_config = feature_config
         self.hidden_channels = hidden_channels
@@ -540,8 +587,16 @@ class GATStateNet(nn.Module):
 
         self.stem_proj = nn.ModuleDict(
             {
-                "tasks": Linear(int(feature_config.task_feature_dim), self.hidden_channels, bias=True),
-                "data": Linear(int(feature_config.data_feature_dim), self.hidden_channels, bias=True),
+                "tasks": Linear(
+                    int(feature_config.task_feature_dim),
+                    self.hidden_channels,
+                    bias=True,
+                ),
+                "data": Linear(
+                    int(feature_config.data_feature_dim),
+                    self.hidden_channels,
+                    bias=True,
+                ),
             }
         )
         self.stem_norm = nn.ModuleDict(
@@ -554,10 +609,34 @@ class GATStateNet(nn.Module):
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             conv_dict = {
-                ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
-                ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
-                ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
-                ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
+                ("tasks", "to", "tasks"): SAGEConv(
+                    hidden_channels,
+                    hidden_channels,
+                    project=True,
+                    aggr="mean",
+                    root_weight=False,
+                ),
+                ("tasks", "from", "tasks"): SAGEConv(
+                    hidden_channels,
+                    hidden_channels,
+                    project=True,
+                    aggr="mean",
+                    root_weight=False,
+                ),
+                ("tasks", "read", "data"): SAGEConv(
+                    hidden_channels,
+                    hidden_channels,
+                    project=True,
+                    aggr="mean",
+                    root_weight=False,
+                ),
+                ("data", "read", "tasks"): SAGEConv(
+                    hidden_channels,
+                    hidden_channels,
+                    project=True,
+                    aggr="mean",
+                    root_weight=False,
+                ),
             }
             # conv_dict = {
             #     ("tasks", "to", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
@@ -570,15 +649,23 @@ class GATStateNet(nn.Module):
 
         self.norms = nn.ModuleDict(
             {
-                "tasks": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers + 1)]),
-                "data": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers + 1)]),
+                "tasks": nn.ModuleList(
+                    [nn.LayerNorm(self.hidden_channels) for _ in range(num_layers + 1)]
+                ),
+                "data": nn.ModuleList(
+                    [nn.LayerNorm(self.hidden_channels) for _ in range(num_layers + 1)]
+                ),
             }
         )
 
         self.beta = nn.ModuleDict(
             {
-                "tasks": nn.ParameterList([nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]),
-                "data": nn.ParameterList([nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]),
+                "tasks": nn.ParameterList(
+                    [nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]
+                ),
+                "data": nn.ParameterList(
+                    [nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]
+                ),
             }
         )
         for nt in self.beta.keys():
@@ -594,19 +681,36 @@ class GATStateNet(nn.Module):
         # )
 
         if self.add_device_load or self.add_progress:
-            self.film = _FiLM(node_types=["tasks", "data"], num_layers=self.num_layers, cond_dim=int(self.g_dim), hidden_dim=self.hidden_channels)
+            self.film = _FiLM(
+                node_types=["tasks", "data"],
+                num_layers=self.num_layers,
+                cond_dim=int(self.g_dim),
+                hidden_dim=self.hidden_channels,
+            )
         else:
             self.film = None  # No FiLM conditioning
 
         self.mlp_global_pool = nn.ModuleDict(
             {
-                "tasks": nn.Sequential(nn.Linear(self.hidden_channels, self.hidden_channels), nn.SiLU(), nn.Linear(self.hidden_channels, 8)),
-                "data": nn.Sequential(nn.Linear(self.hidden_channels, self.hidden_channels), nn.SiLU(), nn.Linear(self.hidden_channels, 8)),
+                "tasks": nn.Sequential(
+                    nn.Linear(self.hidden_channels, self.hidden_channels),
+                    nn.SiLU(),
+                    nn.Linear(self.hidden_channels, 8),
+                ),
+                "data": nn.Sequential(
+                    nn.Linear(self.hidden_channels, self.hidden_channels),
+                    nn.SiLU(),
+                    nn.Linear(self.hidden_channels, 8),
+                ),
             }
         )
 
         if self.add_device_load or self.add_progress:
-            self.mlp_side_info = nn.Sequential(nn.Linear(self.g_dim, self.hidden_channels), nn.SiLU(), nn.Linear(self.hidden_channels, 8))
+            self.mlp_side_info = nn.Sequential(
+                nn.Linear(self.g_dim, self.hidden_channels),
+                nn.SiLU(),
+                nn.Linear(self.hidden_channels, 8),
+            )
         else:
             self.mlp_side_info = None
 
@@ -644,7 +748,9 @@ class GATStateNet(nn.Module):
 
         tasks_read_data = data["tasks", "read", "data"].edge_index
         mask = data["tasks", "read", "data"].edge_attr
-        masked_task_data, _ = self._mask_edges(edge_index=tasks_read_data, edge_mask=mask[:, 0])
+        masked_task_data, _ = self._mask_edges(
+            edge_index=tasks_read_data, edge_mask=mask[:, 0]
+        )
 
         edge_index_dict = {
             ("tasks", "to", "tasks"): data["tasks", "to", "tasks"].edge_index,
@@ -674,7 +780,6 @@ class GATStateNet(nn.Module):
                     g = torch.cat([g, device_load, device_memory], dim=-1)
 
         for l, conv in enumerate(self.convs):
-
             # pre-norm
             # x_pre = {nt: self.norms[nt][l](x_dict[nt]) for nt in x_dict.keys()}
 
@@ -694,7 +799,7 @@ class GATStateNet(nn.Module):
             x_new = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
 
             # residual
-            for nt in x_dict.keys():
+            for nt in x_dict:
                 beta = self.beta[nt][l]
                 beta = torch.sigmoid(beta)
                 x_new[nt] = (1 - beta) * x_dict[nt] + beta * x_new[nt]
@@ -734,10 +839,9 @@ class GATStateNet(nn.Module):
         x = x.reshape(*batch_size, -1, x.shape[-1])
         # print(f"x shape before return: {x.shape}")
         return x.select(dim=-2, index=0)
-    
+
 
 class TaskIterationGNNStateNet(nn.Module):
-
     def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
         mask = edge_mask.to(torch.bool)
         edge_index_masked = edge_index[:, mask]
@@ -745,7 +849,7 @@ class TaskIterationGNNStateNet(nn.Module):
         return edge_index_masked, edge_attr_masked
 
     def __init__(
-        self, 
+        self,
         feature_config: FeatureDimConfig,
         hidden_channels: int = 16,
         n_heads: int = 2,
@@ -755,7 +859,6 @@ class TaskIterationGNNStateNet(nn.Module):
         num_layers: int = 1,
         **_ignored,
     ):
-
         super(TaskIterationGNNStateNet, self).__init__()
 
         self.feature_config = feature_config
@@ -773,8 +876,12 @@ class TaskIterationGNNStateNet(nn.Module):
 
         self.stem_prog = nn.ModuleDict(
             {
-                "tasks": Linear(int(feature_config.task_feature_dim), hidden_channels, bias=True),
-                "data": Linear(int(feature_config.data_feature_dim), hidden_channels, bias=True),
+                "tasks": Linear(
+                    int(feature_config.task_feature_dim), hidden_channels, bias=True
+                ),
+                "data": Linear(
+                    int(feature_config.data_feature_dim), hidden_channels, bias=True
+                ),
             }
         )
 
@@ -783,7 +890,7 @@ class TaskIterationGNNStateNet(nn.Module):
                 "tasks": nn.LayerNorm(hidden_channels),
                 "data": nn.LayerNorm(hidden_channels),
             }
-        )        
+        )
 
         self.convert_data = HeteroDataWrapper()
 
@@ -803,7 +910,6 @@ class TaskIterationGNNStateNet(nn.Module):
         self.task_dependent_convs = nn.ModuleList()
         self.task_dependent_norms = nn.ModuleList()
         self.task_merge_mlps = nn.ModuleList()
-        
 
         for _ in range(num_layers):
             self.task_dependency_convs.append(
@@ -833,45 +939,51 @@ class TaskIterationGNNStateNet(nn.Module):
             self.task_dependent_norms.append(nn.LayerNorm(hidden_channels))
 
             self.task_merge_mlps.append(
-                        nn.Sequential(
-                            nn.Linear(hidden_channels *2, hidden_channels),
-                            nn.LayerNorm(hidden_channels),
-                            nn.LeakyReLU(negative_slope=0.01),
-                            nn.Linear(hidden_channels, hidden_channels),
-                        )
+                nn.Sequential(
+                    nn.Linear(hidden_channels * 2, hidden_channels),
+                    nn.LayerNorm(hidden_channels),
+                    nn.LeakyReLU(negative_slope=0.01),
+                    nn.Linear(hidden_channels, hidden_channels),
+                )
             )
 
+        self.act = nn.LeakyReLU(negative_slope=0.01)
 
-        self.act = nn.LeakyReLU(negative_slope=0.01) 
+        self.g_mlp = (
+            nn.Sequential(
+                nn.Linear(self.g_dim, hidden_channels),
+                nn.LayerNorm(hidden_channels),
+                nn.LeakyReLU(negative_slope=0.01),
+                nn.Linear(hidden_channels, hidden_channels),
+            )
+            if self.g_dim > 0
+            else None
+        )
 
-        self.g_mlp = nn.Sequential(
-            nn.Linear(self.g_dim, hidden_channels),
-            nn.LayerNorm(hidden_channels),
-            nn.LeakyReLU(negative_slope=0.01),
-            nn.Linear(hidden_channels, hidden_channels),
-        ) if self.g_dim > 0 else None       
-
-        self.output_dim = hidden_channels * 2 + (hidden_channels if self.g_dim > 0 else 0)
+        self.output_dim = hidden_channels * 2 + (
+            hidden_channels if self.g_dim > 0 else 0
+        )
         self.output_keys = ["embed"]
-
 
     def forward(self, tensordict: TensorDict):
         batch_size = tensordict.batch_size
-        data= self.convert_data(tensordict)
+        data = self.convert_data(tensordict)
 
         b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
 
         x_tasks = self.stem_prog["tasks"](data["tasks"].x)
-        #x_tasks = self.stem_norm["tasks"](x_tasks)
+        # x_tasks = self.stem_norm["tasks"](x_tasks)
         x_tasks = self.act(x_tasks)
 
         x_data = self.stem_prog["data"](data["data"].x)
-        #x_data = self.stem_norm["data"](x_data)
+        # x_data = self.stem_norm["data"](x_data)
         x_data = self.act(x_data)
 
         data_read_tasks = data["data", "read", "tasks"].edge_index
         mask = data["data", "read", "tasks"].edge_attr
-        read_edges_masked, _ = self._mask_edges(edge_index=data_read_tasks, edge_mask=mask[:, 0])
+        read_edges_masked, _ = self._mask_edges(
+            edge_index=data_read_tasks, edge_mask=mask[:, 0]
+        )
 
         tasks_w_data = self.gnn_tasks_data(
             (x_data, x_tasks),
@@ -880,10 +992,9 @@ class TaskIterationGNNStateNet(nn.Module):
         tasks_w_data = self.norm_tasks_data(tasks_w_data)
         tasks_w_data = self.act(tasks_w_data)
 
-        x_tasks= tasks_w_data
+        x_tasks = tasks_w_data
 
         for l in range(len(self.task_dependency_convs)):
-
             x_tasks_in = self.task_dependency_convs[l](
                 (x_tasks, x_tasks),
                 data["tasks", "to", "tasks"].edge_index,
@@ -905,7 +1016,7 @@ class TaskIterationGNNStateNet(nn.Module):
 
         tasks_global = global_mean_pool(x_tasks, b_tasks)
 
-        g = None 
+        g = None
         if self.g_dim > 0:
             if self.add_progress:
                 time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
@@ -942,14 +1053,12 @@ class TaskIterationGNNStateNet(nn.Module):
         x = torch.cat([x, tasks_global], dim=-1)
         if g is not None:
             x = torch.cat([x, g], dim=-1)
-        
+
         x = x.reshape(*batch_size, -1, x.shape[-1])
         return x.select(dim=-2, index=0)
 
 
-
 class DataIterationGNNStateNet(nn.Module):
-
     def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
         mask = edge_mask.to(torch.bool)
         edge_index_masked = edge_index[:, mask]
@@ -957,7 +1066,7 @@ class DataIterationGNNStateNet(nn.Module):
         return edge_index_masked, edge_attr_masked
 
     def __init__(
-        self, 
+        self,
         feature_config: FeatureDimConfig,
         hidden_channels: int = 16,
         n_heads: int = 2,
@@ -965,10 +1074,9 @@ class DataIterationGNNStateNet(nn.Module):
         add_progress: bool = False,
         n_devices: int = 5,
         num_layers: int = 1,
-        conv_type: str = "SAGE", #"GATv2",
+        conv_type: str = "SAGE",  # "GATv2",
         **_ignored,
     ):
-
         super(DataIterationGNNStateNet, self).__init__()
 
         self.feature_config = feature_config
@@ -987,8 +1095,12 @@ class DataIterationGNNStateNet(nn.Module):
 
         self.stem_prog = nn.ModuleDict(
             {
-                "tasks": Linear(int(feature_config.task_feature_dim), hidden_channels, bias=True),
-                "data": Linear(int(feature_config.data_feature_dim), hidden_channels, bias=True),
+                "tasks": Linear(
+                    int(feature_config.task_feature_dim), hidden_channels, bias=True
+                ),
+                "data": Linear(
+                    int(feature_config.data_feature_dim), hidden_channels, bias=True
+                ),
             }
         )
 
@@ -997,10 +1109,9 @@ class DataIterationGNNStateNet(nn.Module):
                 "tasks": nn.LayerNorm(hidden_channels),
                 "data": nn.LayerNorm(hidden_channels),
             }
-        )        
+        )
 
         self.convert_data = HeteroDataWrapper()
-
 
         self.gnn_tasks_read_data = GATv2Conv(
             (hidden_channels, hidden_channels),
@@ -1010,34 +1121,54 @@ class DataIterationGNNStateNet(nn.Module):
             residual=True,
             dropout=0,
             add_self_loops=False,
-        ) 
+        )
 
-        self.gnn_tasks_from_tasks = GATv2Conv(
-            (hidden_channels, hidden_channels),
-            hidden_channels,
-            heads=n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            add_self_loops=False,
-        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+        self.gnn_tasks_from_tasks = (
+            GATv2Conv(
+                (hidden_channels, hidden_channels),
+                hidden_channels,
+                heads=n_heads,
+                concat=False,
+                residual=True,
+                dropout=0,
+                add_self_loops=False,
+            )
+            if conv_type == "GATv2"
+            else SAGEConv(
+                hidden_channels,
+                hidden_channels,
+                project=True,
+                aggr="add",
+                root_weight=True,
+            )
+        )
 
-        self.gnn_tasks_to_tasks = GATv2Conv(
-            (hidden_channels, hidden_channels),
-            hidden_channels,
-            heads=n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            add_self_loops=False,
-        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+        self.gnn_tasks_to_tasks = (
+            GATv2Conv(
+                (hidden_channels, hidden_channels),
+                hidden_channels,
+                heads=n_heads,
+                concat=False,
+                residual=True,
+                dropout=0,
+                add_self_loops=False,
+            )
+            if conv_type == "GATv2"
+            else SAGEConv(
+                hidden_channels,
+                hidden_channels,
+                project=True,
+                aggr="add",
+                root_weight=True,
+            )
+        )
 
         self.norm_tasks_to_tasks = nn.LayerNorm(hidden_channels)
         self.norm_tasks_from_tasks = nn.LayerNorm(hidden_channels)
         self.norm_task_read_data = nn.LayerNorm(hidden_channels)
 
         self.task_merge_mlp = nn.Sequential(
-            nn.Linear(hidden_channels *2, hidden_channels),
+            nn.Linear(hidden_channels * 2, hidden_channels),
             nn.LayerNorm(hidden_channels),
             nn.LeakyReLU(negative_slope=0.01),
             nn.Linear(hidden_channels, hidden_channels),
@@ -1049,7 +1180,6 @@ class DataIterationGNNStateNet(nn.Module):
         self.task_data_norms = nn.ModuleList()
 
         for l in range(self.num_layers):
-            
             self.task_data_convs.append(
                 GATv2Conv(
                     (hidden_channels, hidden_channels),
@@ -1060,8 +1190,15 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
-
+                if conv_type == "GATv2"
+                else SAGEConv(
+                    hidden_channels,
+                    hidden_channels,
+                    project=True,
+                    aggr="mean",
+                    root_weight=False,
+                )
+            )
 
             self.data_task_convs.append(
                 GATv2Conv(
@@ -1073,42 +1210,57 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
+                if conv_type == "GATv2"
+                else SAGEConv(
+                    hidden_channels,
+                    hidden_channels,
+                    project=True,
+                    aggr="mean",
+                    root_weight=False,
+                )
+            )
 
             self.task_data_norms.append(nn.LayerNorm(hidden_channels))
             self.data_task_norms.append(nn.LayerNorm(hidden_channels))
 
-        self.act = nn.LeakyReLU(negative_slope=0.01) 
+        self.act = nn.LeakyReLU(negative_slope=0.01)
 
-        self.g_mlp = nn.Sequential(
-            nn.Linear(self.g_dim, hidden_channels),
-            nn.LayerNorm(hidden_channels),
-            nn.LeakyReLU(negative_slope=0.01),
-            nn.Linear(hidden_channels, hidden_channels),
-        ) if self.g_dim > 0 else None       
+        self.g_mlp = (
+            nn.Sequential(
+                nn.Linear(self.g_dim, hidden_channels),
+                nn.LayerNorm(hidden_channels),
+                nn.LeakyReLU(negative_slope=0.01),
+                nn.Linear(hidden_channels, hidden_channels),
+            )
+            if self.g_dim > 0
+            else None
+        )
 
-        self.output_dim = hidden_channels * 2 + (hidden_channels if self.g_dim > 0 else 0)
+        self.output_dim = hidden_channels * 2 + (
+            hidden_channels if self.g_dim > 0 else 0
+        )
         self.output_keys = ["embed"]
-
 
     def forward(self, tensordict: TensorDict):
         batch_size = tensordict.batch_size
-        data= self.convert_data(tensordict)
+        data = self.convert_data(tensordict)
 
         b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
         b_data = data["data"].batch if isinstance(data, Batch) else None
 
         x_tasks = self.stem_prog["tasks"](data["tasks"].x)
-        #x_tasks = self.stem_norm["tasks"](x_tasks)
+        # x_tasks = self.stem_norm["tasks"](x_tasks)
         x_tasks = self.act(x_tasks)
 
         x_data = self.stem_prog["data"](data["data"].x)
-        #x_data = self.stem_norm["data"](x_data)
+        # x_data = self.stem_norm["data"](x_data)
         x_data = self.act(x_data)
 
         data_read_tasks = data["data", "read", "tasks"].edge_index
         mask = data["data", "read", "tasks"].edge_attr
-        read_edges_masked, _ = self._mask_edges(edge_index=data_read_tasks, edge_mask=mask[:, 0])
+        read_edges_masked, _ = self._mask_edges(
+            edge_index=data_read_tasks, edge_mask=mask[:, 0]
+        )
 
         tasks_read_data = self.gnn_tasks_read_data(
             (x_data, x_tasks),
@@ -1117,7 +1269,7 @@ class DataIterationGNNStateNet(nn.Module):
         tasks_read_data = self.norm_task_read_data(tasks_read_data)
         tasks_read_data = self.act(tasks_read_data)
 
-        x_tasks= tasks_read_data
+        x_tasks = tasks_read_data
 
         tasks_from_tasks = self.gnn_tasks_from_tasks(
             (x_tasks, x_tasks),
@@ -1133,11 +1285,12 @@ class DataIterationGNNStateNet(nn.Module):
         tasks_to_tasks = self.norm_tasks_to_tasks(tasks_to_tasks)
         tasks_to_tasks = self.act(tasks_to_tasks)
 
-        x_tasks = self.task_merge_mlp(torch.cat([tasks_from_tasks, tasks_to_tasks], dim=-1))
+        x_tasks = self.task_merge_mlp(
+            torch.cat([tasks_from_tasks, tasks_to_tasks], dim=-1)
+        )
         x_tasks = self.act(x_tasks)
 
         for l in range(self.num_layers):
-
             x_data_new = self.data_task_convs[l](
                 (x_tasks, x_data),
                 read_edges_masked.flip(0),
@@ -1160,7 +1313,7 @@ class DataIterationGNNStateNet(nn.Module):
 
         global_state = tasks_global + data_global
 
-        g = None 
+        g = None
         if self.g_dim > 0:
             if self.add_progress:
                 time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
@@ -1197,21 +1350,12 @@ class DataIterationGNNStateNet(nn.Module):
         x = torch.cat([x, global_state], dim=-1)
         if g is not None:
             x = torch.cat([x, g], dim=-1)
-        
+
         x = x.reshape(*batch_size, -1, x.shape[-1])
         return x.select(dim=-2, index=0)
 
 
-
-
-
-
-        
-
-
-
 class OriginalGNNStateNet(nn.Module):
-
     def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
         mask = edge_mask.to(torch.bool)
         edge_index_masked = edge_index[:, mask]
@@ -1255,8 +1399,12 @@ class OriginalGNNStateNet(nn.Module):
 
         self.stem_prog = nn.ModuleDict(
             {
-                "tasks": Linear(int(feature_config.task_feature_dim), hidden_channels, bias=True),
-                "data": Linear(int(feature_config.data_feature_dim), hidden_channels, bias=True),
+                "tasks": Linear(
+                    int(feature_config.task_feature_dim), hidden_channels, bias=True
+                ),
+                "data": Linear(
+                    int(feature_config.data_feature_dim), hidden_channels, bias=True
+                ),
             }
         )
 
@@ -1293,7 +1441,9 @@ class OriginalGNNStateNet(nn.Module):
         self.layer_norm2 = nn.LayerNorm(hidden_channels)
         self.act = nn.LeakyReLU(negative_slope=0.01)
 
-        self.output_dim = hidden_channels * 6 + (hidden_channels if self.g_dim > 0 else 0)
+        self.output_dim = hidden_channels * 6 + (
+            hidden_channels if self.g_dim > 0 else 0
+        )
         self.output_keys = ["embed"]
 
     def forward(self, tensordict: TensorDict):
@@ -1312,7 +1462,9 @@ class OriginalGNNStateNet(nn.Module):
 
         data_read_tasks = data["data", "read", "tasks"].edge_index
         mask = data["data", "read", "tasks"].edge_attr
-        read_edges_masked, _ = self._mask_edges(edge_index=data_read_tasks, edge_mask=mask[:, 0])
+        read_edges_masked, _ = self._mask_edges(
+            edge_index=data_read_tasks, edge_mask=mask[:, 0]
+        )
 
         data_fused_tasks = self.gnn_tasks_data(
             (x_data, x_tasks),
@@ -1336,7 +1488,6 @@ class OriginalGNNStateNet(nn.Module):
 
         g = None
         if self.g_dim > 0:
-
             if self.add_progress:
                 time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
                 time_feature = time_feature.reshape(-1, 1)
@@ -1444,11 +1595,17 @@ class CNNSingleStateNet(nn.Module):
         ch = 1
 
         self.net = nn.Sequential(*blocks)
-        self.output_dim = ((self.width * self.length) * ch + 1) if self.add_progress else ((self.width * self.length) * ch)
+        self.output_dim = (
+            ((self.width * self.length) * ch + 1)
+            if self.add_progress
+            else ((self.width * self.length) * ch)
+        )
         # Initialize CNN weights
         for m in self.net.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="leaky_relu")
+                nn.init.kaiming_normal_(
+                    m.weight, mode="fan_in", nonlinearity="leaky_relu"
+                )
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
@@ -1472,7 +1629,9 @@ class CNNSingleStateNet(nn.Module):
         x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
 
         # Convert the 'tasks' dim back into (width, length) spatial dims
-        x_flat = x_flat.view(flat_bs, width, length, in_channels).permute(0, 3, 1, 2)  # (flat_bs, W, L, C_in)  # (flat_bs, C_in, W, L)
+        x_flat = x_flat.view(flat_bs, width, length, in_channels).permute(
+            0, 3, 1, 2
+        )  # (flat_bs, W, L, C_in)  # (flat_bs, C_in, W, L)
 
         # Run through your convolutional net
         x_flat = self.net(x_flat)
@@ -1499,7 +1658,9 @@ def _ceil_div(a: int, b: int) -> int:
     return (a + b - 1) // b
 
 
-def _compute_num_downsampling_layers(length: int, width: int, minimum_resolution: int) -> int:
+def _compute_num_downsampling_layers(
+    length: int, width: int, minimum_resolution: int
+) -> int:
     h, w = int(length), int(width)
     layers = 0
     while min(h, w) >= 2 * minimum_resolution:
@@ -1542,7 +1703,12 @@ def _align_and_concat(up_feat: torch.Tensor, enc_feat: torch.Tensor) -> torch.Te
     dh, dw = eh - uh, ew - uw
     if dh > 0 or dw > 0:
         # pad order: (left, right, top, bottom)
-        pad = [max(dw // 2, 0), max(dw - dw // 2, 0), max(dh // 2, 0), max(dh - dh // 2, 0)]
+        pad = [
+            max(dw // 2, 0),
+            max(dw - dw // 2, 0),
+            max(dh // 2, 0),
+            max(dh - dh // 2, 0),
+        ]
         up_feat = F.pad(up_feat, pad)
     elif dh < 0 or dw < 0:
         top = (-dh) // 2
@@ -1551,7 +1717,7 @@ def _align_and_concat(up_feat: torch.Tensor, enc_feat: torch.Tensor) -> torch.Te
     return torch.cat([up_feat, enc_feat], dim=1)
 
 
-def _flatten_to_BCHW(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], int]:
+def _flatten_to_BCHW(x: torch.Tensor) -> tuple[torch.Tensor, tuple[int, ...], int]:
     """
     Accept (C,H,W) or (*batch, C, H, W). Return (B, C, H, W),
     """
@@ -1567,12 +1733,12 @@ def _flatten_to_BCHW(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], in
         raise ValueError(f"Expected (C,H,W) or (*batch,C,H,W), got {tuple(x.shape)}")
 
 
-def _unflatten_from_B(xB: torch.Tensor, batch_shape: Tuple[int, ...]) -> torch.Tensor:
+def _unflatten_from_B(xB: torch.Tensor, batch_shape: tuple[int, ...]) -> torch.Tensor:
     """Inverse of _flatten_to_BCHW for the *batch* part; keeps (C,H,W) intact."""
     return xB.squeeze(0) if not batch_shape else xB.view(*batch_shape, *xB.shape[1:])
 
 
-def _flatten_last_dim(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], int]:
+def _flatten_last_dim(x: torch.Tensor) -> tuple[torch.Tensor, tuple[int, ...], int]:
     """
     Accept (P) or (*batch, P). Return (B, P), batch_shape, B.
     """
@@ -1592,7 +1758,15 @@ class ConvNormAct(nn.Module):
     def __init__(self, C_in, C_out, k=3, dilation=1, groups=1, act="silu"):
         super().__init__()
         pad = dilation * (k // 2)
-        self.conv = nn.Conv2d(C_in, C_out, kernel_size=k, padding=pad, dilation=dilation, bias=False, groups=groups)
+        self.conv = nn.Conv2d(
+            C_in,
+            C_out,
+            kernel_size=k,
+            padding=pad,
+            dilation=dilation,
+            bias=False,
+            groups=groups,
+        )
         self.norm = nn.GroupNorm(_choose_gn_groups(C_out), C_out)
         self.act = nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False)
 
@@ -1668,33 +1842,52 @@ class SpatialModulator(nn.Module):
     SPADE-style: z_spa -> (gamma_xy, beta_xy) in R^{B×C×H×W}.
     """
 
-    def __init__(self, C: int, H: int, W: int, z_spa_dim: int, ch_hidden: int = 128, seed_hw: Optional[Tuple[int, int]] = None, init_scale_gamma_xy: float = 0.5, init_scale_beta_xy: float = 0.5):
+    def __init__(
+        self,
+        C: int,
+        H: int,
+        W: int,
+        z_spa_dim: int,
+        ch_hidden: int = 128,
+        seed_hw: tuple[int, int] | None = None,
+        init_scale_gamma_xy: float = 0.5,
+        init_scale_beta_xy: float = 0.5,
+    ):
         super().__init__()
         self.C, self.H, self.W = int(C), int(H), int(W)
         self.h0 = max(4, H // 4) if not seed_hw else seed_hw[0]
         self.w0 = max(4, W // 4) if not seed_hw else seed_hw[1]
 
-        self.to_seed = nn.Sequential(nn.Linear(z_spa_dim, ch_hidden), nn.SiLU(), nn.Linear(ch_hidden, 2 * C * self.h0 * self.w0))
+        self.to_seed = nn.Sequential(
+            nn.Linear(z_spa_dim, ch_hidden),
+            nn.SiLU(),
+            nn.Linear(ch_hidden, 2 * C * self.h0 * self.w0),
+        )
         nn.init.normal_(self.to_seed[-1].weight, std=1e-4)
         nn.init.zeros_(self.to_seed[-1].bias)
 
-        self.scale_gamma_xy = nn.Parameter(torch.tensor(float(init_scale_gamma_xy)), requires_grad=False)
-        self.scale_beta_xy = nn.Parameter(torch.tensor(float(init_scale_beta_xy)), requires_grad=False)
+        self.scale_gamma_xy = nn.Parameter(
+            torch.tensor(float(init_scale_gamma_xy)), requires_grad=False
+        )
+        self.scale_beta_xy = nn.Parameter(
+            torch.tensor(float(init_scale_beta_xy)), requires_grad=False
+        )
 
     @torch.no_grad()
-    def set_strength(self, gamma_xy: Optional[float] = None, beta_xy: Optional[float] = None):
+    def set_strength(self, gamma_xy: float | None = None, beta_xy: float | None = None):
         if gamma_xy is not None:
             self.scale_gamma_xy.fill_(float(gamma_xy))
         if beta_xy is not None:
             self.scale_beta_xy.fill_(float(beta_xy))
 
-    def forward(self, z) -> Tuple[torch.Tensor, torch.Tensor]:  # z: (B, z_spa_dim)
-
+    def forward(self, z) -> tuple[torch.Tensor, torch.Tensor]:  # z: (B, z_spa_dim)
         *lead, z_dim = z.shape
         B = int(torch.prod(torch.tensor(lead))) if lead else z.shape[0]
         zf = z.reshape(-1, z_dim)
         seed = self.to_seed(zf).view(B, 2 * self.C, self.h0, self.w0)
-        maps = F.interpolate(seed, size=(self.H, self.W), mode="bilinear", align_corners=False)
+        maps = F.interpolate(
+            seed, size=(self.H, self.W), mode="bilinear", align_corners=False
+        )
         g_raw, b_raw = maps.chunk(2, dim=1)  # (B,C,H,W)
         g_xy = self.scale_gamma_xy * torch.tanh(g_raw)  # bounded, ≈0
         b_xy = self.scale_beta_xy * b_raw  # small bias
@@ -1721,25 +1914,33 @@ class AdaSPADE_GN(nn.Module):
     ):
         super().__init__()
         self.gn = nn.GroupNorm(groups, C, affine=False)
-        self.to_gb_c = nn.Sequential(nn.Linear(z_ch_dim, ch_hidden), nn.SiLU(), nn.Linear(ch_hidden, 2 * C))
+        self.to_gb_c = nn.Sequential(
+            nn.Linear(z_ch_dim, ch_hidden), nn.SiLU(), nn.Linear(ch_hidden, 2 * C)
+        )
         nn.init.normal_(self.to_gb_c[-1].weight, std=1e-4)
         nn.init.zeros_(self.to_gb_c[-1].bias)
 
-        self.scale_gamma_c = nn.Parameter(torch.tensor(init_scale_gamma_c), requires_grad=False)
-        self.scale_beta_c = nn.Parameter(torch.tensor(init_scale_beta_c), requires_grad=False)
+        self.scale_gamma_c = nn.Parameter(
+            torch.tensor(init_scale_gamma_c), requires_grad=False
+        )
+        self.scale_beta_c = nn.Parameter(
+            torch.tensor(init_scale_beta_c), requires_grad=False
+        )
 
         self.spatial = spatial
         self.enable_spatial = bool(enable_spatial)
         self.enable_channel = bool(enable_channel)
 
     @torch.no_grad()
-    def set_strength(self, gamma_c: Optional[float] = None, beta_c: Optional[float] = None):
+    def set_strength(self, gamma_c: float | None = None, beta_c: float | None = None):
         if gamma_c is not None:
             self.scale_gamma_c.fill_(float(gamma_c))
         if beta_c is not None:
             self.scale_beta_c.fill_(float(beta_c))
 
-    def forward(self, x: torch.Tensor, z_ch: torch.Tensor, z_spa: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, z_ch: torch.Tensor, z_spa: torch.Tensor
+    ) -> torch.Tensor:
         # z_ch: (B, z_ch_dim); z_spa: (B, z_spa_dim)
         B, Cx, H, W = x.shape
         z_ch = z_ch.reshape(B, -1)
@@ -1797,7 +1998,7 @@ class DilationState(nn.Module):
         z_ch_dim: int = 8,
         z_spa_dim: int = 8,
         num_blocks: int = 3,
-        dilation_schedule: Optional[List[int]] = None,
+        dilation_schedule: list[int] | None = None,
         use_eca: bool = True,
         add_z: bool = False,
         add_device_load: bool = False,
@@ -1816,7 +2017,9 @@ class DilationState(nn.Module):
     ):
         super().__init__()
         if not hasattr(feature_config, "task_feature_dim"):
-            raise AttributeError("feature_config must have attribute 'task_feature_dim'")
+            raise AttributeError(
+                "feature_config must have attribute 'task_feature_dim'"
+            )
 
         self.width = int(width)
         self.length = int(length)
@@ -1870,18 +2073,43 @@ class DilationState(nn.Module):
             use_film = film_in_all_blocks or (i >= num_blocks - film_last_k)
 
             norm1 = AdaSPADE_GN(
-                C=C, groups=groups, spatial=self.spatial, z_ch_dim=zc_eff, ch_hidden=16, init_scale_gamma_c=init_gamma_c, init_scale_beta_c=init_beta_c, enable_spatial=use_spa, enable_channel=use_film
+                C=C,
+                groups=groups,
+                spatial=self.spatial,
+                z_ch_dim=zc_eff,
+                ch_hidden=16,
+                init_scale_gamma_c=init_gamma_c,
+                init_scale_beta_c=init_beta_c,
+                enable_spatial=use_spa,
+                enable_channel=use_film,
             )
             norm2 = AdaSPADE_GN(
-                C=C, groups=groups, spatial=self.spatial, z_ch_dim=zc_eff, ch_hidden=16, init_scale_gamma_c=init_gamma_c, init_scale_beta_c=init_beta_c, enable_spatial=use_spa, enable_channel=use_film
+                C=C,
+                groups=groups,
+                spatial=self.spatial,
+                z_ch_dim=zc_eff,
+                ch_hidden=16,
+                init_scale_gamma_c=init_gamma_c,
+                init_scale_beta_c=init_beta_c,
+                enable_spatial=use_spa,
+                enable_channel=use_film,
             )
 
-            self.blocks.append(DilatedResBlock_SPADE(C, dilation=dilation_schedule[i % len(dilation_schedule)], norm1=norm1, norm2=norm2))
+            self.blocks.append(
+                DilatedResBlock_SPADE(
+                    C,
+                    dilation=dilation_schedule[i % len(dilation_schedule)],
+                    norm1=norm1,
+                    norm2=norm2,
+                )
+            )
 
         self.eca = ECA(C, k_size=3) if use_eca else nn.Identity()
 
     @torch.no_grad()
-    def set_noise_strength(self, gamma_c=None, beta_c=None, gamma_xy=None, beta_xy=None):
+    def set_noise_strength(
+        self, gamma_c=None, beta_c=None, gamma_xy=None, beta_xy=None
+    ):
         if gamma_xy is not None or beta_xy is not None:
             self.spatial.set_strength(gamma_xy, beta_xy)
         for blk in self.blocks:
@@ -1904,7 +2132,7 @@ class DilationState(nn.Module):
             xt = xt.unsqueeze(0)
         *batch_shape, T, Cin = xt.shape
         H, W = self.length, self.width
-        assert T == H * W, f"tasks={T} differs from H*W={H*W}"
+        assert T == H * W, f"tasks={T} differs from H*W={H * W}"
         assert Cin == self.in_channels
 
         B = 1
@@ -1956,7 +2184,17 @@ class DilationPolicyHead(nn.Module):
     Minimal actor head: ('embed')=(..., C, H, W) -> logits (…, H*W, A)
     """
 
-    def __init__(self, input_dim: int, output_dim: int, width: int, length: int, init_mode: str = "tiny", tiny_std: float = 1e-3, debug: bool = False, **_ignored):  # 'zero' | 'tiny' | 'kaiming'
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        width: int,
+        length: int,
+        init_mode: str = "tiny",
+        tiny_std: float = 1e-3,
+        debug: bool = False,
+        **_ignored,
+    ):  # 'zero' | 'tiny' | 'kaiming'
         super().__init__()
         self.width = int(width)
         self.length = int(length)
@@ -1980,7 +2218,9 @@ class DilationPolicyHead(nn.Module):
             nn.init.kaiming_normal_(self.proj.weight, nonlinearity="linear")
             nn.init.zeros_(self.proj.bias)
         else:
-            raise ValueError(f"init_mode must be 'zero' | 'tiny' | 'kaiming', got {init_mode!r}")
+            raise ValueError(
+                f"init_mode must be 'zero' | 'tiny' | 'kaiming', got {init_mode!r}"
+            )
 
     def forward(self, obs, embed):
         if embed.dim() == 3:
@@ -2013,7 +2253,6 @@ class DilationValueHead(nn.Module):
         n_devices: int = 5,
         **_ignored,
     ):
-
         super().__init__()
         C = int(input_dim)
         P = int(proj_dim)
@@ -2031,8 +2270,15 @@ class DilationValueHead(nn.Module):
         nn.init.zeros_(self.attn.bias)
 
         self.add_gap = bool(add_gap)
-        mlp_in = (2 * P if self.add_gap else P) + (Dz if add_z else 0) + (3 * n_devices if add_device_load else 0) + (2 if add_progress else 0)
-        self.mlp = nn.Sequential(nn.Linear(mlp_in, hidden_channels), nn.SiLU(), nn.Linear(hidden_channels, 1))
+        mlp_in = (
+            (2 * P if self.add_gap else P)
+            + (Dz if add_z else 0)
+            + (3 * n_devices if add_device_load else 0)
+            + (2 if add_progress else 0)
+        )
+        self.mlp = nn.Sequential(
+            nn.Linear(mlp_in, hidden_channels), nn.SiLU(), nn.Linear(hidden_channels, 1)
+        )
         nn.init.normal_(self.mlp[-1].weight, std=tiny_std)
         nn.init.zeros_(self.mlp[-1].bias)
 
@@ -2067,7 +2313,9 @@ class DilationValueHead(nn.Module):
             device_load = obs["aux", "device_load"]
             device_memory = obs["aux", "device_memory"]
             device_feat = torch.cat([device_load, device_memory], dim=-1)
-            device_feat = device_feat.reshape(-1, device_feat.size(-1))  # (B, 3*n_devices)
+            device_feat = device_feat.reshape(
+                -1, device_feat.size(-1)
+            )  # (B, 3*n_devices)
             pooled = torch.cat([pooled, device_feat], dim=-1)
 
         if self.add_progress:
@@ -2084,7 +2332,6 @@ class DilationValueHead(nn.Module):
 
 
 class UnconditionedDilationState(nn.Module):
-
     def __init__(
         self,
         feature_config,
@@ -2096,13 +2343,15 @@ class UnconditionedDilationState(nn.Module):
         n_devices: int = 5,
         debug: bool = True,
         num_blocks: int = 2,
-        dilation_schedule: Optional[List[int]] = None,
+        dilation_schedule: list[int] | None = None,
         use_eca: bool = True,
         **_ignored,
     ):
         super().__init__()
         if not hasattr(feature_config, "task_feature_dim"):
-            raise AttributeError("feature_config must have attribute 'task_feature_dim'")
+            raise AttributeError(
+                "feature_config must have attribute 'task_feature_dim'"
+            )
 
         self.width = int(width)
         self.length = int(length)
@@ -2119,7 +2368,16 @@ class UnconditionedDilationState(nn.Module):
         if not dilation_schedule:
             dilation_schedule = [1, 2, 3]
 
-        self.blocks = nn.ModuleList([DilatedResBlock(C, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu") for i in range(num_blocks)])
+        self.blocks = nn.ModuleList(
+            [
+                DilatedResBlock(
+                    C,
+                    dilation=dilation_schedule[i % len(dilation_schedule)],
+                    act="silu",
+                )
+                for i in range(num_blocks)
+            ]
+        )
 
         self.eca = ECA(C, k_size=3) if use_eca else nn.Identity()
 
@@ -2135,9 +2393,9 @@ class UnconditionedDilationState(nn.Module):
         else:
             self.film = None
 
-        self.in_channels_per_scale: List[int] = [C]
+        self.in_channels_per_scale: list[int] = [C]
         self.output_dim = C
-        self.output_keys: List[str] = ["embed"]
+        self.output_keys: list[str] = ["embed"]
 
     def forward(self, x):
         xt = x["nodes", "tasks", "attr"]
@@ -2148,8 +2406,10 @@ class UnconditionedDilationState(nn.Module):
 
         *batch_shape, T, Cin = xt.shape
         H, W = self.length, self.width
-        assert T == H * W, f"tasks={T} differs from length*width={H*W}"
-        assert Cin == self.in_channels, f"in_channels mismatch: expected {self.in_channels}, got {Cin}"
+        assert T == H * W, f"tasks={T} differs from length*width={H * W}"
+        assert Cin == self.in_channels, (
+            f"in_channels mismatch: expected {self.in_channels}, got {Cin}"
+        )
 
         # Flatten and reshape to BCHW
         B = 1
@@ -2205,9 +2465,17 @@ class UnconditionedDilationState(nn.Module):
 
 
 class UnconditionedDilationPolicyHead(nn.Module):
-
     def __init__(
-        self, input_dim: int, hidden_channels: int, width: int, length: int, output_dim: int, debug: bool = True, num_blocks: int = 2, dilation_schedule: Optional[List[int]] = None, **_ignored
+        self,
+        input_dim: int,
+        hidden_channels: int,
+        width: int,
+        length: int,
+        output_dim: int,
+        debug: bool = True,
+        num_blocks: int = 2,
+        dilation_schedule: list[int] | None = None,
+        **_ignored,
     ):
         super().__init__()
         self.width = int(width)
@@ -2220,22 +2488,37 @@ class UnconditionedDilationPolicyHead(nn.Module):
 
         if not dilation_schedule:
             dilation_schedule = [1, 2]
-        self.pre = ConvNormAct(self.input_dim, self.hidden_channels, k=3, dilation=1, act="silu")
-        self.blocks = nn.ModuleList([DilatedResBlock(self.hidden_channels, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu") for i in range(num_blocks)])
+        self.pre = ConvNormAct(
+            self.input_dim, self.hidden_channels, k=3, dilation=1, act="silu"
+        )
+        self.blocks = nn.ModuleList(
+            [
+                DilatedResBlock(
+                    self.hidden_channels,
+                    dilation=dilation_schedule[i % len(dilation_schedule)],
+                    act="silu",
+                )
+                for i in range(num_blocks)
+            ]
+        )
         self.out_conv = nn.Conv2d(self.hidden_channels, self.output_dim, kernel_size=1)
 
-        self.in_channels_per_scale: List[int] = [self.input_dim]
-        self.input_keys: List[str] = ["embed"]
+        self.in_channels_per_scale: list[int] = [self.input_dim]
+        self.input_keys: list[str] = ["embed"]
 
     def forward(self, obs, *features):
         if len(features) == 0:
-            raise ValueError("Decoder expects encoder features: (*enc_feats, bottleneck_map)")
+            raise ValueError(
+                "Decoder expects encoder features: (*enc_feats, bottleneck_map)"
+            )
         b_map = features[-1]  # (C,H,W) or (*batch,C,H,W)
 
         # Normalize to BCHW
         hB, batch_shape, B = _flatten_to_BCHW(b_map)  # (B,C,H,W)
         _, C, H, W = hB.shape
-        assert C == self.input_dim, f"Decoder input_dim={self.input_dim}, got bottleneck C={C}"
+        assert self.input_dim == C, (
+            f"Decoder input_dim={self.input_dim}, got bottleneck C={C}"
+        )
 
         hB = self.pre(hB)
         for blk in self.blocks:
@@ -2243,18 +2526,38 @@ class UnconditionedDilationPolicyHead(nn.Module):
         logits_map = self.out_conv(hB)  # (B, A, H, W)
 
         if len(batch_shape) == 0:
-            logits = logits_map.permute(0, 2, 3, 1).reshape(H * W, self.output_dim).squeeze(0)
+            logits = (
+                logits_map.permute(0, 2, 3, 1)
+                .reshape(H * W, self.output_dim)
+                .squeeze(0)
+            )
         else:
-            logits = logits_map.permute(0, 2, 3, 1).reshape(B, H * W, self.output_dim).view(*batch_shape, H * W, self.output_dim)
+            logits = (
+                logits_map.permute(0, 2, 3, 1)
+                .reshape(B, H * W, self.output_dim)
+                .view(*batch_shape, H * W, self.output_dim)
+            )
         return logits
 
 
 class UNetState(nn.Module):
-
-    def __init__(self, feature_config, hidden_channels: int, width: int, length: int, add_progress: bool = False, minimum_resolution: int = 2, debug: bool = True, pool_mode: str = "avg", **_ignored):
+    def __init__(
+        self,
+        feature_config,
+        hidden_channels: int,
+        width: int,
+        length: int,
+        add_progress: bool = False,
+        minimum_resolution: int = 2,
+        debug: bool = True,
+        pool_mode: str = "avg",
+        **_ignored,
+    ):
         super().__init__()
         if not hasattr(feature_config, "task_feature_dim"):
-            raise AttributeError("feature_config must have attribute 'task_feature_dim'")
+            raise AttributeError(
+                "feature_config must have attribute 'task_feature_dim'"
+            )
         self.width = int(width)
         self.length = int(length)
         self.in_channels = int(feature_config.task_feature_dim)
@@ -2264,12 +2567,20 @@ class UNetState(nn.Module):
         self.add_progress = bool(add_progress)
         self.progress_dim = 1 if self.add_progress else 0
 
-        self.num_layers = _compute_num_downsampling_layers(self.length, self.width, self.minimum_resolution)
+        self.num_layers = _compute_num_downsampling_layers(
+            self.length, self.width, self.minimum_resolution
+        )
 
         self.enc_blocks = nn.ModuleList()
         if self.num_layers == 0:
             self.stem = nn.Sequential(
-                nn.Conv2d(self.in_channels, self.hidden_channels, kernel_size=3, padding=1, bias=True),
+                nn.Conv2d(
+                    self.in_channels,
+                    self.hidden_channels,
+                    kernel_size=3,
+                    padding=1,
+                    bias=True,
+                ),
                 nn.LeakyReLU(negative_slope=0.01, inplace=False),
             )
             channels = self.hidden_channels
@@ -2307,7 +2618,9 @@ class UNetState(nn.Module):
             self.film = nn.Linear(self.progress_dim, 2 * channels, bias=True)
 
         self.output_dim = channels
-        self.output_keys: List[str] = [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
+        self.output_keys: list[str] = [f"enc_{i}" for i in range(self.num_layers)] + [
+            "embed"
+        ]
 
     def forward(self, x):
         xt = x["nodes", "tasks", "attr"]  # shape: (*batch, tasks, C) or (tasks, C)
@@ -2317,15 +2630,19 @@ class UNetState(nn.Module):
             xt = xt.unsqueeze(0)  # -> (1, tasks, C)
 
         *batch_shape, tasks, in_ch = xt.shape
-        assert in_ch == self.in_channels, f"in_channels mismatch: expected {self.in_channels}, got {in_ch}"
-        assert tasks == self.length * self.width, f"got tasks={tasks}, expected length*width={self.length*self.width}"
+        assert in_ch == self.in_channels, (
+            f"in_channels mismatch: expected {self.in_channels}, got {in_ch}"
+        )
+        assert tasks == self.length * self.width, (
+            f"got tasks={tasks}, expected length*width={self.length * self.width}"
+        )
 
         B = 1
         for d in batch_shape:
             B *= int(d)
         h = xt.reshape(B, self.length, self.width, self.in_channels).permute(0, 3, 1, 2)
 
-        enc_feats: List[torch.Tensor] = []
+        enc_feats: list[torch.Tensor] = []
         if self.num_layers == 0:
             h = self.stem(h)
         else:
@@ -2347,7 +2664,9 @@ class UNetState(nn.Module):
             zB, _, _ = _flatten_last_dim(z)
             gamma_beta = self.film(zB)
             gamma, beta = gamma_beta.chunk(2, dim=-1)
-            b_map = gamma.unsqueeze(-1).unsqueeze(-1) * b_map + beta.unsqueeze(-1).unsqueeze(-1)
+            b_map = gamma.unsqueeze(-1).unsqueeze(-1) * b_map + beta.unsqueeze(
+                -1
+            ).unsqueeze(-1)
 
         if self.debug:
             print(f"[Encoder] bottleneck {h.shape}")
@@ -2363,7 +2682,6 @@ class UNetState(nn.Module):
 
 
 class UNetPolicyHead(nn.Module):
-
     def __init__(
         self,
         input_dim: int,
@@ -2388,16 +2706,24 @@ class UNetPolicyHead(nn.Module):
         self.deconv_bilinear_init = bool(deconv_bilinear_init)
         self.debug = debug
 
-        self.num_layers = _compute_num_downsampling_layers(self.length, self.width, self.minimum_resolution)
+        self.num_layers = _compute_num_downsampling_layers(
+            self.length, self.width, self.minimum_resolution
+        )
 
         if self.num_layers == 0:
             self.in_channels_per_scale = [self.input_dim]  # just bottleneck
         else:
-            skip_channels = [self.hidden_channels * (2**i) for i in range(self.num_layers)]
+            skip_channels = [
+                self.hidden_channels * (2**i) for i in range(self.num_layers)
+            ]
             self.in_channels_per_scale = [*skip_channels, self.input_dim]
 
-        expected_bottleneck_ch = self.hidden_channels * (2 ** max(self.num_layers - 1, 0))
-        assert self.input_dim == expected_bottleneck_ch, f"Decoder input_dim={self.input_dim} must equal encoder bottleneck channels {expected_bottleneck_ch}"
+        expected_bottleneck_ch = self.hidden_channels * (
+            2 ** max(self.num_layers - 1, 0)
+        )
+        assert self.input_dim == expected_bottleneck_ch, (
+            f"Decoder input_dim={self.input_dim} must equal encoder bottleneck channels {expected_bottleneck_ch}"
+        )
 
         self.up_blocks = nn.ModuleList()
         self.dec_blocks = nn.ModuleList()
@@ -2407,7 +2733,15 @@ class UNetPolicyHead(nn.Module):
             out_ch = self.hidden_channels * (2**i)
 
             if self.upsample_type == "deconv":
-                up = nn.ConvTranspose2d(prev_ch, out_ch, kernel_size=2, stride=2, padding=0, output_padding=0, bias=True)
+                up = nn.ConvTranspose2d(
+                    prev_ch,
+                    out_ch,
+                    kernel_size=2,
+                    stride=2,
+                    padding=0,
+                    output_padding=0,
+                    bias=True,
+                )
                 if self.deconv_bilinear_init:
                     _init_deconv_bilinear_(up)
             elif self.upsample_type == "nearest":
@@ -2428,7 +2762,9 @@ class UNetPolicyHead(nn.Module):
             )
             prev_ch = out_ch
 
-        self.input_keys: List[str] = [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
+        self.input_keys: list[str] = [f"enc_{i}" for i in range(self.num_layers)] + [
+            "embed"
+        ]
 
         # Final projection to logits at full resolution
         final_in = self.hidden_channels if self.num_layers >= 1 else self.input_dim
@@ -2442,7 +2778,9 @@ class UNetPolicyHead(nn.Module):
 
     def forward(self, obs, *features):
         if len(features) == 0:
-            raise ValueError("Decoder expects encoder features: (*enc_feats, bottleneck_map)")
+            raise ValueError(
+                "Decoder expects encoder features: (*enc_feats, bottleneck_map)"
+            )
         enc_feats = features[:-1]
         b_map = features[-1]  # shape: (C,H,W) or (*batch,C,H,W)
 
@@ -2455,7 +2793,9 @@ class UNetPolicyHead(nn.Module):
         # Decode
         h = b_mapB
         if self.num_layers > 0:
-            for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(encB)):
+            for up, dec, enc in zip(
+                self.up_blocks, self.dec_blocks, reversed(encB), strict=False
+            ):
                 h = up(h)
                 if self.debug:
                     print(f"[Decoder] up: {h.shape} + {enc.shape}")
@@ -2471,11 +2811,19 @@ class UNetPolicyHead(nn.Module):
             print(f"[Decoder] logits: {logits_map.shape}")
 
         if single:
-            logits = logits_map.permute(0, 2, 3, 1).reshape(-1, 2 * self.output_dim).squeeze(0)
+            logits = (
+                logits_map.permute(0, 2, 3, 1)
+                .reshape(-1, 2 * self.output_dim)
+                .squeeze(0)
+            )
             logits = self.logit_layer(logits)  # (H*W, output_dim)
         else:
             _, _, H, W = logits_map.shape
-            logits = logits_map.permute(0, 2, 3, 1).reshape(B, H * W, 2 * self.output_dim).view(*batch_shape, H * W, 2 * self.output_dim)
+            logits = (
+                logits_map.permute(0, 2, 3, 1)
+                .reshape(B, H * W, 2 * self.output_dim)
+                .view(*batch_shape, H * W, 2 * self.output_dim)
+            )
             logits = self.logit_layer(logits)  # (*batch, H*W, output_dim)
         return logits
 
@@ -2486,10 +2834,10 @@ class PooledOutputHead(nn.Module):
         input_dim: int,  # shared dim before final MLP
         hidden_channels: int,  # hidden size in OutputHead
         output_dim: int,  # final dimension (e.g., 1 for V(s))
-        activation: Optional[nn.Module] = None,
-        initialization: Optional[dict] = None,
+        activation: nn.Module | None = None,
+        initialization: dict | None = None,
         layer_norm: bool = True,
-        in_channels_per_scale: Optional[Sequence[int]] = None,
+        in_channels_per_scale: Sequence[int] | None = None,
         add_device_load: bool = False,
         add_progress: bool = True,
         n_devices: int = 5,
@@ -2503,9 +2851,9 @@ class PooledOutputHead(nn.Module):
         self.debug = debug
 
         self._built: bool = False
-        self._in_dims: Optional[List[int]] = None
+        self._in_dims: list[int] | None = None
         self._proj = nn.ModuleList()
-        self._head: Optional[OutputHead] = None
+        self._head: OutputHead | None = None
         self.add_device_load = bool(add_device_load)
         self.n_devices = int(n_devices)
         self.add_progress = bool(add_progress)
@@ -2513,7 +2861,9 @@ class PooledOutputHead(nn.Module):
         if in_channels_per_scale is not None:
             self._build(list(int(c) for c in in_channels_per_scale))
 
-        self.in_channels_per_scale: Optional[List[int]] = list(in_channels_per_scale) if in_channels_per_scale is not None else None
+        self.in_channels_per_scale: list[int] | None = (
+            list(in_channels_per_scale) if in_channels_per_scale is not None else None
+        )
 
         oh_input_dim = self.proj_dim
         if self.add_device_load:
@@ -2530,7 +2880,7 @@ class PooledOutputHead(nn.Module):
             layer_norm=layer_norm,
         )
 
-    def _build(self, in_dims: List[int]) -> None:
+    def _build(self, in_dims: list[int]) -> None:
         if len(in_dims) == 0:
             raise ValueError("PooledOutputHead: at least one scale is required.")
         self._in_dims = in_dims
@@ -2559,9 +2909,9 @@ class PooledOutputHead(nn.Module):
         if len(encoder_outputs) == 0:
             raise ValueError("PooledOutputHead expects at least one encoder feature.")
 
-        featsB: List[torch.Tensor] = []
-        batch_shape_ref: Optional[Tuple[int, ...]] = None
-        seen_dims: List[int] = []
+        featsB: list[torch.Tensor] = []
+        batch_shape_ref: tuple[int, ...] | None = None
+        seen_dims: list[int] = []
 
         for f in encoder_outputs:
             fB, batch_shape, _ = _flatten_to_BCHW(f)
@@ -2571,7 +2921,9 @@ class PooledOutputHead(nn.Module):
             if batch_shape_ref is None:
                 batch_shape_ref = batch_shape
             elif batch_shape != batch_shape_ref:
-                raise ValueError(f"Mismatched batch shapes among inputs: {batch_shape} vs {batch_shape_ref}")
+                raise ValueError(
+                    f"Mismatched batch shapes among inputs: {batch_shape} vs {batch_shape_ref}"
+                )
             featsB.append(fB)
 
         if not self._built:
@@ -2580,14 +2932,18 @@ class PooledOutputHead(nn.Module):
         else:
             assert self._in_dims is not None and self._head is not None
             if len(seen_dims) != len(self._in_dims):
-                raise ValueError(f"Expected {len(self._in_dims)} feature maps, got {len(seen_dims)}.")
-            for k, (got, exp) in enumerate(zip(seen_dims, self._in_dims)):
+                raise ValueError(
+                    f"Expected {len(self._in_dims)} feature maps, got {len(seen_dims)}."
+                )
+            for k, (got, exp) in enumerate(zip(seen_dims, self._in_dims, strict=False)):
                 if got != exp:
-                    raise ValueError(f"Channel mismatch at scale {k}: got C={got}, expected C={exp}.")
+                    raise ValueError(
+                        f"Channel mismatch at scale {k}: got C={got}, expected C={exp}."
+                    )
 
         # Per-scale: GAP -> (B,C_i) -> LN+Linear -> (B,D)
-        zs: List[torch.Tensor] = []
-        for fB, proj in zip(featsB, self._proj):
+        zs: list[torch.Tensor] = []
+        for fB, proj in zip(featsB, self._proj, strict=False):
             z = F.adaptive_avg_pool2d(fB, 1).flatten(1)  # (B, C_i)
             z = proj(z)  # (B, D)
             zs.append(z)
@@ -2628,10 +2984,10 @@ class UNetValueHead(nn.Module):
         input_dim: int,  # shared dim before final MLP
         hidden_channels: int,  # hidden size in OutputHead
         output_dim: int,  # final dimension (e.g., 1 for V(s))
-        activation: Optional[nn.Module] = None,
-        initialization: Optional[dict] = None,
+        activation: nn.Module | None = None,
+        initialization: dict | None = None,
         layer_norm: bool = True,
-        in_channels_per_scale: Optional[Sequence[int]] = None,
+        in_channels_per_scale: Sequence[int] | None = None,
         debug: bool = False,
         add_device_load: bool = True,
         add_progress: bool = False,
@@ -2644,7 +3000,11 @@ class UNetValueHead(nn.Module):
         self.output_dim = int(output_dim)
         self.debug = bool(debug)
 
-        self.in_channels_per_scale: Optional[List[int]] = list(int(c) for c in in_channels_per_scale) if in_channels_per_scale is not None else None
+        self.in_channels_per_scale: list[int] | None = (
+            list(int(c) for c in in_channels_per_scale)
+            if in_channels_per_scale is not None
+            else None
+        )
         self.head = PooledOutputHead(
             input_dim=self.input_dim,
             hidden_channels=self.hidden_channels,
@@ -2676,10 +3036,10 @@ class UnconditionedDilationValueHead(nn.Module):
         input_dim: int,  # shared dim before final MLP
         hidden_channels: int,  # hidden size in OutputHead
         output_dim: int,  # final dimension (e.g., 1 for V(s))
-        activation: Optional[nn.Module] = None,
-        initialization: Optional[dict] = None,
+        activation: nn.Module | None = None,
+        initialization: dict | None = None,
         layer_norm: bool = True,
-        in_channels_per_scale: Optional[Sequence[int]] = None,
+        in_channels_per_scale: Sequence[int] | None = None,
         debug: bool = False,
         add_device_load: bool = True,
         add_progress: bool = True,
@@ -2692,7 +3052,11 @@ class UnconditionedDilationValueHead(nn.Module):
         self.output_dim = int(output_dim)
         self.debug = bool(debug)
 
-        self.in_channels_per_scale: Optional[List[int]] = list(int(c) for c in in_channels_per_scale) if in_channels_per_scale is not None else None
+        self.in_channels_per_scale: list[int] | None = (
+            list(int(c) for c in in_channels_per_scale)
+            if in_channels_per_scale is not None
+            else None
+        )
 
         self.head = PooledOutputHead(
             input_dim=self.input_dim,
@@ -2716,7 +3080,14 @@ class UnconditionedDilationValueHead(nn.Module):
 
 
 class OriginalUNetState(nn.Module):
-    def __init__(self, feature_config: FeatureDimConfig, hidden_channels: int, width: int, add_progress: bool = False, **_ignored):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: int,
+        width: int,
+        add_progress: bool = False,
+        **_ignored,
+    ):
         super().__init__()
         self.output_keys = []
         self.width = width
@@ -2775,7 +3146,9 @@ class OriginalUNetState(nn.Module):
         x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
 
         # 4) Convert 'tasks' → spatial dims (width × width), then to (flat_bs, C_in, W, W)
-        x_flat = x_flat.view(flat_bs, width, width, in_channels).permute(0, 3, 1, 2)  # (flat_bs, W, W, C_in)  # (flat_bs, C_in, W, W)
+        x_flat = x_flat.view(flat_bs, width, width, in_channels).permute(
+            0, 3, 1, 2
+        )  # (flat_bs, W, W, C_in)  # (flat_bs, C_in, W, W)
 
         # 5) Run through encoder blocks + pooling, collecting intermediate feats
         enc_feats_flat = []
@@ -2810,8 +3183,14 @@ class OriginalUNetState(nn.Module):
 
 
 class OriginalUNetPolicyHead(nn.Module):
-
-    def __init__(self, input_dim: int, hidden_channels: int, width: int, output_dim: int, **_ignored):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_channels: int,
+        width: int,
+        output_dim: int,
+        **_ignored,
+    ):
         super().__init__()
         self.width = width
         self.hidden_channels = hidden_channels
@@ -2823,9 +3202,15 @@ class OriginalUNetPolicyHead(nn.Module):
         self.up_blocks = nn.ModuleList()
         self.dec_blocks = nn.ModuleList()
         for i in reversed(range(self.num_layers)):
-            in_ch = hidden_channels * (2 ** (i + 1)) if i < self.num_layers - 1 else hidden_channels * (2**i)
+            in_ch = (
+                hidden_channels * (2 ** (i + 1))
+                if i < self.num_layers - 1
+                else hidden_channels * (2**i)
+            )
             out_ch = hidden_channels * (2**i)
-            self.up_blocks.append(nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2))
+            self.up_blocks.append(
+                nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
+            )
             self.dec_blocks.append(
                 nn.Sequential(
                     nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1),
@@ -2878,7 +3263,9 @@ class OriginalUNetPolicyHead(nn.Module):
                 self.width // (2**self.num_layers),
             )
 
-        for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_feats)):
+        for up, dec, enc in zip(
+            self.up_blocks, self.dec_blocks, reversed(enc_feats), strict=False
+        ):
             b = up(b)
             if not single:
                 enc = enc.view(flat_bs, *enc.shape[len(batch_shape) :])
@@ -2903,8 +3290,8 @@ class OriginalUNetValueHead(nn.Module):
         input_dim: int,
         hidden_channels: int,
         output_dim: int,
-        activation: Optional[nn.Module] = None,
-        initialization: Optional[dict] = None,
+        activation: nn.Module | None = None,
+        initialization: dict | None = None,
         layer_norm: bool = True,
         debug: bool = False,
         **_ignored,

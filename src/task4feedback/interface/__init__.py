@@ -1,31 +1,26 @@
 from task4feedback.fastsim2 import (
-    Devices,
-    Topology,
-    TaskNoise,
     Data,
+    Devices,
     DeviceType,
+    ExecutionState,
     SchedulerInput,
+    TaskNoise,
+    Topology,
 )
-from task4feedback.fastsim2 import ExecutionState
 
-
-from .lambdas import VariantBuilder, TaskLabeler, DataBlockTransformer
-from .types import DeviceTuple, TaskTuple, DataBlockTuple, VariantTuple, ConnectionTuple
+from .lambdas import DataBlockTransformer, TaskLabeler, VariantBuilder
+from .types import ConnectionTuple, DataBlockTuple, DeviceTuple, TaskTuple, VariantTuple
 from .wrappers import (
     DataBlocks,
-    TaskGraph,
-    System,
-    SimulatorInput,
-    SimulatorDriver,
-    SimulatorFactory,
     ExecutionState,
     ExternalMapper,
     ExternalObserver,
+    SimulatorDriver,
+    SimulatorFactory,
+    SimulatorInput,
+    System,
+    TaskGraph,
     TaskNoise,
-    RangeTransitionConditions,
-    DefaultTransitionConditions,
-    uniform_connected_devices,
-    start_logger,
-    SchedulerState,
     create_graph_spec,
+    uniform_connected_devices,
 )

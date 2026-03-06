@@ -25,27 +25,13 @@ void init_scheduler_ext(nb::module_ &m) {
           "get_tasks", [](const SchedulerState &self) -> const auto & { return self.get_tasks(); },
           nb::rv_policy::reference_internal);
 
-  nb::class_<TransitionConditions>(m, "TransitionConditions")
-      .def("should_map", &TransitionConditions::should_map)
-      .def("should_reserve", &TransitionConditions::should_reserve)
-      .def("should_launch", &TransitionConditions::should_launch);
-
-  nb::class_<DefaultTransitionConditions, TransitionConditions>(m, "DefaultTransitionConditions")
-      .def(nb::init<>());
-
-  nb::class_<RangeTransitionConditions, TransitionConditions>(m, "RangeTransitionConditions")
-      .def(nb::init<int32_t, int32_t, int32_t>(), "mapped_reserved_gap"_a,
-           "reserved_launched_gap"_a, "total_in_flight"_a)
-      .def_ro("mapped_reserved_gap", &RangeTransitionConditions::mapped_reserved_gap)
-      .def_ro("reserved_launched_gap", &RangeTransitionConditions::reserved_launched_gap)
-      .def_ro("total_in_flight", &RangeTransitionConditions::total_in_flight);
-
-  nb::class_<BatchTransitionConditions, TransitionConditions>(m, "BatchTransitionConditions")
-      .def(nb::init<int32_t, int32_t, int32_t>(), "batch_size"_a, "queue_threshold"_a,
-           "max_in_flight"_a)
-      .def_ro("batch_size", &BatchTransitionConditions::batch_size)
-      .def_ro("queue_threshold", &BatchTransitionConditions::queue_threshold)
-      .def_ro("max_in_flight", &BatchTransitionConditions::max_in_flight)
-      .def_ro("last_accessed", &BatchTransitionConditions::last_accessed)
-      .def_ro("active_batch", &BatchTransitionConditions::active_batch);
+  nb::class_<HysteresisTransitionConditions>(m, "HysteresisTransitionConditions")
+      .def(nb::init<>())
+      .def(nb::init<int32_t, int32_t, int32_t>(), "open_in_flight"_a, "close_in_flight"_a,
+           "starvation_threshold"_a)
+      .def_ro("open_in_flight", &HysteresisTransitionConditions::open_in_flight)
+      .def_ro("close_in_flight", &HysteresisTransitionConditions::close_in_flight)
+      .def_ro("starvation_threshold", &HysteresisTransitionConditions::starvation_threshold)
+      .def_ro("last_window_opened", &HysteresisTransitionConditions::last_window_opened)
+      .def_ro("window_open", &HysteresisTransitionConditions::window_open);
 }

@@ -57,9 +57,9 @@ optimizer:
   lr: 1e-3
 
 runtime:
-  batch_size: 5
-  queue_threshold: 10
-  max_in_flight: 256
+  open_in_flight: 16
+  close_in_flight: 21
+  starvation_threshold: 5
 
 wandb:
   enabled: true

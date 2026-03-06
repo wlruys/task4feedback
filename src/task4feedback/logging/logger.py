@@ -30,3 +30,16 @@ if ENABLE_LOGGING:
     mapping = logging.getLogger("mapping")
     launching = logging.getLogger("launching")
     training = logging.getLogger("training")
+else:
+    class DummyLogger:
+        def __getattr__(self, _name):
+            return lambda *args, **kwargs: None
+
+    runtime = DummyLogger()
+    resource = DummyLogger()
+    state = DummyLogger()
+    data = DummyLogger()
+    stats = DummyLogger()
+    mapping = DummyLogger()
+    launching = DummyLogger()
+    training = DummyLogger()
