@@ -22,6 +22,7 @@ option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
 option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
 option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" OFF)
 option(ENABLE_PARMETIS "Enable ParMETIS, everything needs to be installed in ~/local" OFF)
+option(ENABLE_VECTORIZATION_REPORT "Emit compiler vectorization reports" OFF)
 
 
 if(ENABLE_CCACHE)
