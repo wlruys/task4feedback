@@ -151,13 +151,12 @@ static inline taskid_t collect_ready(std::span<const taskid_t> neighbors,
 
   out.resize(n);
   const taskid_t * __restrict__ neighbors_ptr = neighbors.data();
-  taskid_t * __restrict__ out_ptr = out.data();
 
   taskid_t w = 0;
   for (std::size_t i = 0; i < n; ++i) {
     const taskid_t tid = neighbors_ptr[i];
     const bool ready = dec_ready(tid);
-    out_ptr[static_cast<std::size_t>(w)] = tid;
+    out[static_cast<std::size_t>(w)] = tid;
     w += static_cast<taskid_t>(ready);
   }
 
@@ -2783,13 +2782,12 @@ static inline taskid_t filter_tasks(std::span<const taskid_t> tasks, TaskIDList&
   }
   
   out.resize(tasks.size());
-  taskid_t * __restrict__ out_ptr = out.data();
   taskid_t w = 0;
   const taskid_t * __restrict__ it = tasks.data();
   const taskid_t *end = it + tasks.size();
   for (; it != end; ++it) {
     const taskid_t tid = *it;
-    out_ptr[static_cast<std::size_t>(w)] = tid;
+    out[static_cast<std::size_t>(w)] = tid;
     w += static_cast<taskid_t>(pred(tid));
   }
   

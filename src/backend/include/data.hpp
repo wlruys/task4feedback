@@ -1013,15 +1013,8 @@ protected:
 
   static bool check_valid(std::span<const dataid_t> list, const LocationManager &locations,
                           devid_t device_id) {
-    const auto device_mask = device_bit(device_id);
-    const devicemask_t * __restrict__ flags = locations.flags_data();
-    const dataid_t * __restrict__ it = list.data();
-    const dataid_t *end = it + list.size();
-    bool all_valid = true;
-    for (; it != end; ++it) {
-      all_valid &= (flags[static_cast<std::size_t>(*it)] & device_mask) != 0;
-    }
-    return all_valid;
+    return std::ranges::all_of(
+        list, [&](auto data_id) { return !locations.is_invalid(data_id, device_id); });
   }
 
   static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
@@ -1301,23 +1294,32 @@ public:
   mem_t shared_size(const Data &data, std::span<const dataid_t> list1,
                     std::span<const dataid_t> list2) const {
     mem_t shared_size = 0;
-    // Contract: list1 and list2 are sorted by data_id.
-    const dataid_t *it1 = list1.data();
-    const dataid_t *it2 = list2.data();
-    const dataid_t *end1 = it1 + list1.size();
-    const dataid_t *end2 = it2 + list2.size();
-    while (it1 != end1 && it2 != end2) {
-      if (*it1 < *it2) {
+    if (std::is_sorted(list1.begin(), list1.end()) &&
+        std::is_sorted(list2.begin(), list2.end())) {
+      const dataid_t *it1 = list1.data();
+      const dataid_t *it2 = list2.data();
+      const dataid_t *end1 = it1 + list1.size();
+      const dataid_t *end2 = it2 + list2.size();
+      while (it1 != end1 && it2 != end2) {
+        if (*it1 < *it2) {
+          ++it1;
+          continue;
+        }
+        if (*it2 < *it1) {
+          ++it2;
+          continue;
+        }
+        shared_size += data.get_size(*it1);
         ++it1;
-        continue;
-      }
-      if (*it2 < *it1) {
         ++it2;
-        continue;
       }
-      shared_size += data.get_size(*it1);
-      ++it1;
-      ++it2;
+      return shared_size;
+    }
+
+    for (const auto data_id : list1) {
+      if (std::find(list2.begin(), list2.end(), data_id) != list2.end()) {
+        shared_size += data.get_size(data_id);
+      }
     }
     return shared_size;
   }
