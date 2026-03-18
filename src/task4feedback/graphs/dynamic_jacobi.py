@@ -1,13 +1,15 @@
+from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Optional, Self
+
+from ..interface.types import _bytes_to_readable
+from ..logging import training
+from .base import *
+from .base import register_graph
+from .jacobi import *
 from .mesh.base import *
 from .mesh.partition import *
-from .base import *
-from typing import Callable, Optional, Self
-from collections import defaultdict
-from .jacobi import *
-from .base import register_graph
-from ..interface.types import _bytes_to_readable
-from dataclasses import dataclass, field
-from ..logging import training
 
 
 @dataclass
@@ -29,7 +31,7 @@ class DynamicJacobiData(JacobiData):
         geometry: Geometry,
         config: DynamicJacobiConfig,
         workload: DynamicWorkload,
-        system: Optional[System] = None,
+        system: System | None = None,
     ) -> Self:
         data = DynamicJacobiData(geometry, config, workload, system=system)
         return data
@@ -39,7 +41,7 @@ class DynamicJacobiData(JacobiData):
         geometry: Geometry,
         config: DynamicJacobiConfig = DynamicJacobiConfig(),
         workload: DynamicWorkload = None,
-        system: Optional[System] = None,
+        system: System | None = None,
     ):
         self.workload = workload
         self.cell_to_interior_elems = {}
@@ -244,7 +246,6 @@ class DynamicJacobiData(JacobiData):
             / system.fastest_bandwidth,
             "compute_average": sum(compute_time) / len(compute_time),
         }
-        print(self.data_stat)
 
     def reset_data_size(self, system: System):
         """
@@ -338,8 +339,8 @@ class DynamicJacobiGraph(JacobiGraph):
         self,
         geometry: Geometry,
         config: DynamicJacobiConfig,
-        system: Optional[System] = None,
-        variant: Optional[VariantBuilder] = None,
+        system: System | None = None,
+        variant: VariantBuilder | None = None,
     ):
         self.workload = config.workload
         self.workload.set_geometry(geometry)
@@ -394,9 +395,7 @@ class DynamicJacobiGraph(JacobiGraph):
 
         class DynamicJacobiVariant(JacobiVariant):
             @staticmethod
-            def build_variant(
-                arch: DeviceType, task: TaskTuple
-            ) -> Optional[VariantTuple]:
+            def build_variant(arch: DeviceType, task: TaskTuple) -> VariantTuple | None:
                 memory_usage = self.config.task_internal_memory
                 vcu_usage = self.config.vcu_usage
 

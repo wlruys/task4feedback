@@ -206,4 +206,5 @@ experiments/models_*
 
 *.pdf
 *.png
-backup
+.*/
+

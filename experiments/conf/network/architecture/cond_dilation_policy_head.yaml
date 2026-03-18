@@ -1,6 +1,5 @@
 defaults:
   - activation/leaky_relu@activation
-  - initialization/orthogonal@initialization
 
 
 _target_: task4feedback.ml.models.DilationPolicyHead
@@ -8,4 +7,5 @@ hidden_channels: 16
 width: NoNeedToChange
 length: NoNeedToChange
 minimum_resolution: 4
+init_mode: zero
 debug: False

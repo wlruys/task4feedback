@@ -33,6 +33,7 @@ from torch_geometric.nn import (
     global_mean_pool,
 )
 from torch_geometric.nn.norm import GraphNorm, MessageNorm
+from torchrl.envs import EnvBase
 
 from task4feedback import fastsim2 as fastsim
 from task4feedback.interface import *
@@ -40,7 +41,6 @@ from task4feedback.interface.wrappers import (
     observation_to_heterodata,
     observation_to_heterodata_truncate,
 )
-from torchrl.envs import EnvBase
 
 
 def kaiming_init(layer, a=0.01, mode="fan_in", nonlinearity="leaky_relu"):
@@ -92,7 +92,7 @@ def init_weights(m):
 
 class BatchWrapper(nn.Module):
     def __init__(self, network: nn.Module, device: str | None = "cpu"):
-        super(BatchWrapper, self).__init__()
+        super().__init__()
         self.network = network
 
         self.register_parameter("dummy_param_0", nn.Parameter(torch.randn(1)))
@@ -137,7 +137,7 @@ class BatchWrapper(nn.Module):
 
 class HeteroDataWrapper(nn.Module):
     def __init__(self, device: str | None = "cpu"):
-        super(HeteroDataWrapper, self).__init__()
+        super().__init__()
 
         self.register_parameter("dummy_param_0", nn.Parameter(torch.randn(1)))
 
@@ -269,7 +269,7 @@ class OutputHead(nn.Module):
         debug: bool = False,
         **_ignored,
     ):
-        super(OutputHead, self).__init__()
+        super().__init__()
         self.debug = debug
         if initialization is None:
             layer1_init = kaiming_init
@@ -341,7 +341,7 @@ class LogitsOutputHead(OutputHead):
         logit_stabilizer: LogitStabilizer | None = None,
         debug: bool = False,
     ):
-        super(LogitsOutputHead, self).__init__(
+        super().__init__(
             input_dim,
             hidden_channels,
             output_dim,
@@ -365,7 +365,7 @@ class LogitsOutputHead(OutputHead):
 
 class ValueOutputHead(OutputHead):
     def __init__(self, *args, **kwargs):
-        super(ValueOutputHead, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def forward(self, obs, emb):
         return super().forward(emb)
@@ -373,7 +373,7 @@ class ValueOutputHead(OutputHead):
 
 class PolicyOutputHead(OutputHead):
     def __init__(self, *args, **kwargs):
-        super(PolicyOutputHead, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def forward(self, obs, emb):
         return super().forward(emb)
@@ -391,7 +391,7 @@ class VectorStateNet(nn.Module):
         add_device_load: bool = True,
         n_devices: int = 5,
     ):
-        super(VectorStateNet, self).__init__()
+        super().__init__()
         self.feature_config = feature_config
         if isinstance(hidden_channels, int):
             hidden_channels = [hidden_channels]
@@ -563,7 +563,7 @@ class GATStateNet(nn.Module):
         n_devices: int = 5,
         **_ignored,
     ):
-        super(GATStateNet, self).__init__()
+        super().__init__()
         self.feature_config = feature_config
         self.hidden_channels = hidden_channels
 
@@ -859,7 +859,7 @@ class TaskIterationGNNStateNet(nn.Module):
         num_layers: int = 1,
         **_ignored,
     ):
-        super(TaskIterationGNNStateNet, self).__init__()
+        super().__init__()
 
         self.feature_config = feature_config
         self.n_heads = n_heads
@@ -1077,7 +1077,7 @@ class DataIterationGNNStateNet(nn.Module):
         conv_type: str = "SAGE",  # "GATv2",
         **_ignored,
     ):
-        super(DataIterationGNNStateNet, self).__init__()
+        super().__init__()
 
         self.feature_config = feature_config
         self.n_heads = n_heads
@@ -1372,7 +1372,7 @@ class OriginalGNNStateNet(nn.Module):
         n_devices: int = 5,
         **_ignored,
     ):
-        super(OriginalGNNStateNet, self).__init__()
+        super().__init__()
 
         self.feature_config = feature_config
         self.n_heads = n_heads
@@ -2190,7 +2190,7 @@ class DilationPolicyHead(nn.Module):
         output_dim: int,
         width: int,
         length: int,
-        init_mode: str = "tiny",
+        init_mode: str | None = "tiny",
         tiny_std: float = 1e-3,
         debug: bool = False,
         **_ignored,
@@ -2206,21 +2206,25 @@ class DilationPolicyHead(nn.Module):
         self.output_dim = self.A
 
         self.proj = nn.Conv2d(self.Cin, self.A, kernel_size=1, bias=True)
-
-        init_mode = init_mode.lower()
-        if init_mode == "zero":
-            nn.init.zeros_(self.proj.weight)
-            nn.init.zeros_(self.proj.bias)
-        elif init_mode == "tiny":
+        if init_mode is None:
             nn.init.normal_(self.proj.weight, std=float(tiny_std))
             nn.init.zeros_(self.proj.bias)
-        elif init_mode == "kaiming":
-            nn.init.kaiming_normal_(self.proj.weight, nonlinearity="linear")
-            nn.init.zeros_(self.proj.bias)
         else:
-            raise ValueError(
-                f"init_mode must be 'zero' | 'tiny' | 'kaiming', got {init_mode!r}"
-            )
+            init_mode = init_mode.lower()
+            if init_mode == "zero":
+                nn.init.zeros_(self.proj.weight)
+                nn.init.zeros_(self.proj.bias)
+            elif init_mode == "tiny":
+                nn.init.normal_(self.proj.weight, std=float(tiny_std))
+                nn.init.zeros_(self.proj.bias)
+            elif init_mode == "kaiming":
+                nn.init.kaiming_normal_(self.proj.weight, nonlinearity="linear")
+                nn.init.zeros_(self.proj.bias)
+            else:
+                raise ValueError(
+                    "init_mode must be None or 'zero' | 'tiny' | 'kaiming', "
+                    f"got {init_mode!r}"
+                )
 
     def forward(self, obs, embed):
         if embed.dim() == 3:

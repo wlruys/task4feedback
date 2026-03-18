@@ -357,7 +357,7 @@ class JacobiGraph(ComputeDataGraph):
                 self.task_to_cell[task_id] = cell
                 self.task_to_level[task_id] = i
                 self.level_to_task[i].append(task_id)
-
+                self.add_tag(task_id, self.xy_from_id(task_id))
                 # print(f"Task {task_id} created with name {name}")
 
                 interior_block = self.data.get_block_at_step(Cell(cell), i)

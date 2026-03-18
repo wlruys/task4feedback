@@ -23,8 +23,6 @@ deterministic_torch: true
 reward:
   verbose: False
   random_start: False
-  gamma: 0.99
-  uniform_reward_scale: 10
 
 graph:
   config:
@@ -57,8 +55,8 @@ optimizer:
   lr: 1e-3
 
 runtime:
-  open_in_flight: 32
-  close_in_flight: 64
+  open_in_flight: 64
+  close_in_flight: 128
   starvation_threshold: 5
 
 wandb:

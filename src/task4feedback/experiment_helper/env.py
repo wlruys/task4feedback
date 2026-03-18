@@ -9,7 +9,6 @@ import hydra
 import numpy as np
 import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
-
 from torchrl.envs import (
     Compose,
     InitTracker,
@@ -162,9 +161,6 @@ def _setup_observation_norms(
                     )
                 except TypeError:
                     norm.init_stats(num_iter=num_iter, key=in_keys[0])
-                if cfg.feature.observer.version in "DFGH":
-                    norm.loc[-env.n_compute_devices :] = 0.0
-                    norm.scale[-env.n_compute_devices :] = 1.0
         finally:
             env.enable_reward()
         return NormalizationDetails(
@@ -240,6 +236,16 @@ def make_env(
                 if cfg.algorithm.rollout_steps == 0
                 else cfg.algorithm.rollout_steps + 1
             )
+        ),
+        gamma=cfg.algorithm.gamma,
+        baseline_policy=(
+            int(round(sum(policy_times) / len(policy_times)))
+            if (
+                getattr(getattr(cfg, "eval", None), "pickle_path", None)
+                and os.path.exists(cfg.eval.pickle_path)
+                and (policy_times := pickle.load(open(cfg.eval.pickle_path, "rb")).get("policy_times", []))
+            )
+            else cfg.reward.baseline_policy
         ),
     )
     env = TransformedEnv(env, StepCounter())

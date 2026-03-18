@@ -23,7 +23,6 @@ deterministic_torch: true
 reward:
   verbose: False
   random_start: False
-  gamma: 0.99
 
 graph:
   config:
