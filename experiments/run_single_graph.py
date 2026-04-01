@@ -60,10 +60,12 @@ def configure_training(cfg: DictConfig):
             env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
             graph = env.get_graph()
             # env.set_reset_counter(324)
-            # if isinstance(graph, DynamicJacobiGraph):
-            #     workload = graph.get_workload()
-            #     workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
-            # exit()
+            if isinstance(graph, DynamicJacobiGraph):
+                workload = graph.get_workload()
+                workload.animate_workload(
+                    show=False, title="outputs/workload_animation.mp4"
+                )
+            exit()
             # print("Running option: EFT")
             # start = time.time()
             # # env.rollout(max_steps=999)

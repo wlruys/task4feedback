@@ -171,6 +171,8 @@ class HeteroDataWrapper(nn.Module):
         self.batch_size = obs.batch_size
         # print("1 BATCH SHAPE obs", obs.shape, obs.batch_size, self.batch_size)
         obs = obs.reshape(-1)
+        if actions is not None and hasattr(actions, "reshape"):
+            actions = actions.reshape(-1)
 
         _h_data = []
 
@@ -379,6 +381,41 @@ class PolicyOutputHead(OutputHead):
         return super().forward(emb)
 
 
+class GNNValueHead(OutputHead):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, obs, emb):
+        if emb.ndim < 2:
+            return super().forward(emb)
+
+        candidate_dim = -2
+        feature_dim = -1
+
+        *batch, num_candidates, hidden_dim = emb.shape
+        batch_flat = int(torch.tensor(batch).prod().item()) if batch else 1
+        emb = emb.reshape(batch_flat, num_candidates, hidden_dim)
+
+        mask = obs["aux", "candidate_mask"].reshape(batch_flat, num_candidates).to(
+            torch.bool
+        )
+        weights = mask.to(dtype=emb.dtype).unsqueeze(-1)
+        pooled = (emb * weights).sum(dim=1)
+        denom = weights.sum(dim=1).clamp_min(1.0)
+        pooled = pooled / denom
+        pooled = pooled.view(*batch, hidden_dim)
+
+        return super().forward(pooled)
+
+
+class GNNPolicyHead(OutputHead):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, obs, emb):
+        return super().forward(emb)
+
+
 class VectorStateNet(nn.Module):
     def __init__(
         self,
@@ -466,6 +503,191 @@ class VectorStateNet(nn.Module):
         task_activations = self.layers(task_features)
 
         return task_activations
+
+
+class CandidateTaskGNNStateNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: int = 16,
+        n_heads: int = 2,
+        num_layers: int = 2,
+        add_progress: bool = False,
+        add_device_load: bool = True,
+        n_devices: int = 5,
+        **_ignored,
+    ):
+        super().__init__()
+
+        self.feature_config = feature_config
+        self.hidden_channels = int(hidden_channels)
+        self.n_heads = int(n_heads)
+        self.num_layers = int(num_layers)
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+        self.n_devices = int(n_devices)
+
+        self.convert_data = HeteroDataWrapper()
+        self.act = nn.LeakyReLU(negative_slope=0.01)
+
+        self.g_dim = 0
+        if self.add_progress:
+            self.g_dim += 2
+        if self.add_device_load:
+            self.g_dim += 3 * self.n_devices
+
+        self.stem = Linear(
+            int(feature_config.task_feature_dim), self.hidden_channels, bias=True
+        )
+        self.stem_norm = nn.LayerNorm(self.hidden_channels)
+
+        self.task_to_convs = nn.ModuleList()
+        self.task_from_convs = nn.ModuleList()
+        self.task_norms = nn.ModuleList()
+        for _ in range(self.num_layers):
+            self.task_to_convs.append(
+                GATv2Conv(
+                    (self.hidden_channels, self.hidden_channels),
+                    self.hidden_channels,
+                    heads=self.n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0.0,
+                    add_self_loops=False,
+                )
+            )
+            self.task_from_convs.append(
+                GATv2Conv(
+                    (self.hidden_channels, self.hidden_channels),
+                    self.hidden_channels,
+                    heads=self.n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0.0,
+                    add_self_loops=False,
+                )
+            )
+            self.task_norms.append(nn.LayerNorm(self.hidden_channels))
+
+        self.global_proj = nn.Sequential(
+            nn.Linear(self.hidden_channels, self.hidden_channels),
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Linear(self.hidden_channels, self.hidden_channels),
+        )
+
+        if self.g_dim > 0:
+            self.g_proj = nn.Sequential(
+                nn.Linear(self.g_dim, self.hidden_channels),
+                nn.LayerNorm(self.hidden_channels),
+                nn.LeakyReLU(negative_slope=0.01),
+            )
+        else:
+            self.g_proj = None
+
+        self.output_dim = self.hidden_channels * 2 + (
+            self.hidden_channels if self.g_proj is not None else 0
+        )
+        self.output_keys = ["embed"]
+
+    def _build_global_features(self, tensordict: TensorDict) -> torch.Tensor | None:
+        g = None
+        if self.add_progress:
+            time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+            progress_feature = tensordict["aux", "progress"]
+            g = torch.cat(
+                [time_feature.reshape(-1, 1), progress_feature.reshape(-1, 1)], dim=-1
+            )
+
+        if self.add_device_load:
+            device_load = tensordict["aux", "device_load"].reshape(
+                -1, 2 * self.n_devices
+            )
+            device_memory = tensordict["aux", "device_memory"].reshape(
+                -1, 1 * self.n_devices
+            )
+            side = torch.cat([device_load, device_memory], dim=-1)
+            g = side if g is None else torch.cat([g, side], dim=-1)
+
+        if g is None or self.g_proj is None:
+            return None
+        return self.g_proj(g)
+
+    def forward(self, tensordict: TensorDict):
+        task_features = tensordict["nodes", "tasks", "attr"]
+        *batch, max_candidates, _ = task_features.shape
+        batch_flat = int(torch.tensor(batch).prod().item()) if batch else 1
+        candidate_mask = (
+            tensordict["aux", "candidate_mask"]
+            .reshape(batch_flat, max_candidates)
+            .to(torch.bool)
+        )
+
+        data = self.convert_data(tensordict)
+        x_tasks = self.act(self.stem_norm(self.stem(data["tasks"].x)))
+
+        edge_to = data["tasks", "to", "tasks"].edge_index
+        edge_from = data["tasks", "from", "tasks"].edge_index
+
+        for to_conv, from_conv, norm in zip(
+            self.task_to_convs, self.task_from_convs, self.task_norms
+        ):
+            x_to = to_conv((x_tasks, x_tasks), edge_to)
+            x_from = from_conv((x_tasks, x_tasks), edge_from)
+            x_tasks = self.act(norm(0.5 * (x_to + x_from)))
+
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+        pooled = global_mean_pool(x_tasks, task_batch)
+        pooled = self.global_proj(pooled)
+
+        global_features = self._build_global_features(tensordict)
+
+        output = x_tasks.new_zeros((batch_flat, max_candidates, self.output_dim))
+        if task_batch is None:
+            count = int(candidate_mask[0].sum().item())
+            if count > 0:
+                local = torch.cat(
+                    [
+                        x_tasks[:count],
+                        pooled[0].unsqueeze(0).expand(count, -1),
+                    ],
+                    dim=-1,
+                )
+                if global_features is not None:
+                    local = torch.cat(
+                        [
+                            local,
+                            global_features[0].unsqueeze(0).expand(count, -1),
+                        ],
+                        dim=-1,
+                    )
+                output[0, :count] = local
+        else:
+            ptr = data["tasks"].ptr
+            for b in range(batch_flat):
+                start = int(ptr[b].item())
+                end = int(ptr[b + 1].item())
+                count = end - start
+                if count <= 0:
+                    continue
+                local = torch.cat(
+                    [
+                        x_tasks[start:end],
+                        pooled[b].unsqueeze(0).expand(count, -1),
+                    ],
+                    dim=-1,
+                )
+                if global_features is not None:
+                    local = torch.cat(
+                        [
+                            local,
+                            global_features[b].unsqueeze(0).expand(count, -1),
+                        ],
+                        dim=-1,
+                    )
+                output[b, :count] = local
+
+        output = output * candidate_mask.unsqueeze(-1).to(output.dtype)
+        return output.view(*batch, max_candidates, self.output_dim)
 
 
 def _zero_last_linear(seq: nn.Sequential):

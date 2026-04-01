@@ -1,37 +1,38 @@
 import glob
 import os
-from pathlib import Path
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional, List, Dict, Any, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 import wandb
 from omegaconf import OmegaConf
 from tensordict import TensorDict
 from torchrl._utils import compile_with_warmup
-from torchrl.envs import EnvBase
 from torchrl.collectors import MultiSyncDataCollector, SyncDataCollector
 from torchrl.data.replay_buffers import TensorDictReplayBuffer
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
+from torchrl.envs import EnvBase
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.utils import ValueEstimators
 from torchrl.objectives.value import GAE, VTrace
 
 from task4feedback.logging import training
 from task4feedback.ml.util import (
-    log_parameter_and_gradient_norms,
     EvaluationConfig,
-    save_checkpoint,
+    load_checkpoint,
+    log_parameter_and_gradient_norms,
     make_eval_envs,
     redistribute_rewards_uniform,
     run_evaluation,
-    load_checkpoint,
+    save_checkpoint,
 )
 
-from .base import AlgorithmConfig, LoggingConfig
 from ..base import ActorCriticModule
+from .base import AlgorithmConfig, LoggingConfig
 
 
 @dataclass
@@ -68,7 +69,7 @@ class PPOConfig(AlgorithmConfig):
     timeout: int = 60 * 60 * 24 * 2  # 2 day
 
 
-def should_log(n_updates: int, logging_config: Optional[LoggingConfig]) -> bool:
+def should_log(n_updates: int, logging_config: LoggingConfig | None) -> bool:
     if logging_config is None:
         return False
     return (
@@ -77,13 +78,13 @@ def should_log(n_updates: int, logging_config: Optional[LoggingConfig]) -> bool:
     )
 
 
-def should_eval(n_updates: int, eval_config: Optional[EvaluationConfig]) -> bool:
+def should_eval(n_updates: int, eval_config: EvaluationConfig | None) -> bool:
     if eval_config is None:
         return False
     return eval_config.eval_interval > 0 and n_updates % eval_config.eval_interval == 0
 
 
-def should_checkpoint(n_updates: int, logging_config: Optional[LoggingConfig]) -> bool:
+def should_checkpoint(n_updates: int, logging_config: LoggingConfig | None) -> bool:
     if logging_config is None:
         return False
     return (
@@ -124,7 +125,7 @@ def _save_best_checkpoint_if_dir_set(
     optimizer: torch.optim.Optimizer,
     lr_scheduler,
     n_collections: int,
-) -> Optional[str]:
+) -> str | None:
     if logging_config.best_policy_dir is None:
         return None
 
@@ -151,13 +152,13 @@ def _save_best_checkpoint_if_dir_set(
 def log_training_metrics(
     flattened_data: TensorDict,
     tensordict_data: TensorDict,
-    loss: Dict[str, torch.Tensor],
+    loss: dict[str, torch.Tensor],
     loss_module: ClipPPOLoss,
     optimizer: torch.optim.Optimizer,
     n_updates: int,
     n_collections: int,
     n_samples: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Log training metrics to wandb and return the payload."""
     with torch.no_grad():
         rewards = flattened_data.get(("next", "reward"))
@@ -201,7 +202,7 @@ def log_training_metrics(
 
         post_clip_norms = log_parameter_and_gradient_norms(loss_module)
 
-        log_payload: Dict[str, Any] = {
+        log_payload: dict[str, Any] = {
             **post_clip_norms,
             "batch/n_updates": n_updates,
             "batch/n_collections": n_collections,
@@ -339,7 +340,7 @@ def _build_replay_buffer(
 
 def _build_collector(
     actor_critic_module: ActorCriticModule,
-    env_constructors: List[Callable[[], EnvBase]],
+    env_constructors: list[Callable[[], EnvBase]],
     ppo_config: PPOConfig,
     max_states_per_collection: int,
 ):
@@ -390,14 +391,14 @@ def _build_collector(
 
 def run_ppo(
     actor_critic_module: ActorCriticModule,
-    env_constructors: List[Callable[[], EnvBase]],
+    env_constructors: list[Callable[[], EnvBase]],
     ppo_config: PPOConfig,
-    logging_config: Optional[LoggingConfig],
-    eval_config: Optional[EvaluationConfig] = None,
-    optimizer: Optional[torch.optim.Optimizer] = None,
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
+    logging_config: LoggingConfig | None,
+    eval_config: EvaluationConfig | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    lr_scheduler: torch.optim.lr_scheduler.LambdaLR | None = None,
     seed: int = 0,
-    resume_from: Optional[Union[str, Path]] = None,
+    resume_from: str | Path | None = None,
 ):
     # Global threading control
     if ppo_config.threads_per_worker and ppo_config.threads_per_worker > 0:
@@ -451,7 +452,7 @@ def run_ppo(
         )
         start_step = state["step"]
 
-    def update_policy(batch: TensorDict) -> Dict[str, torch.Tensor]:
+    def update_policy(batch: TensorDict) -> dict[str, torch.Tensor]:
         loss_vals = loss_module(batch)
         loss_value = (
             loss_vals["loss_objective"]

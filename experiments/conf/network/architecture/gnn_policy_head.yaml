@@ -3,7 +3,7 @@ defaults:
   - initialization/orthogonal@initialization.layer2
   - activation/leaky_relu@activation
 
-_target_: task4feedback.ml.models.PolicyOutputHead
+_target_: task4feedback.ml.models.GNNPolicyHead
 hidden_channels: 32
 layer_norm: true
 

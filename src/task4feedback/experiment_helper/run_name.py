@@ -1,8 +1,13 @@
 # run_name.py
 from __future__ import annotations
-import hashlib, datetime, re, json
+
+import datetime
+import hashlib
+import json
+import re
+from collections.abc import Sequence
+
 from omegaconf import DictConfig, OmegaConf
-from typing import Sequence
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -66,7 +71,10 @@ def make_folder_name(cfg: DictConfig, change_name=True):
     - boundary_ratio: str
     """
 
-    if cfg.graph.config.get("r_interior") is not None and cfg.graph.config.get("r_boundary") is not None:
+    if (
+        cfg.graph.config.get("r_interior") is not None
+        and cfg.graph.config.get("r_boundary") is not None
+    ):
         interior_ratio = cfg.graph.config.r_interior
         boundary_ratio = cfg.graph.config.r_boundary
     else:
@@ -92,8 +100,11 @@ def make_folder_name(cfg: DictConfig, change_name=True):
     if cfg.graph.config.steps > 256:
         graph_name = "l" + graph_name
 
+    if OmegaConf.select(cfg, "arch") is not None:
+        graph_name = OmegaConf.select(cfg, "arch") + "_" + graph_name
+
     return (
-        f"{cfg.graph.config.n}w_{cfg.graph.config.steps}lvl_{cfg.system.n_devices-1}gpu_{graph_name}_{interior_ratio}-{boundary_ratio}_{int(cfg.graph.config.level_memory/1e8)}",
+        f"{cfg.graph.config.n}w_{cfg.graph.config.steps}lvl_{cfg.system.n_devices - 1}gpu_{graph_name}_{interior_ratio}-{boundary_ratio}_{int(cfg.graph.config.level_memory / 1e8)}_{cfg.feature.observer.version}",
         graph_name,
         interior_ratio,
         boundary_ratio,

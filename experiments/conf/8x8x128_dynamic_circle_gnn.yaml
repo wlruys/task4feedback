@@ -1,7 +1,7 @@
 defaults:
-  - 8x8x128_dynamic_corners.yaml
-  - feature: cnn_batch
-  - network: cond_dilation_cnn_batch
+  - 8x8x128_dynamic_circle.yaml
+  - feature: gnn_batch
+  - network: gnn_baseline
   - _self_
 
 algorithm:
@@ -18,7 +18,7 @@ feature:
   observer:
     prev_frames: 1
     batched: true
-    version: F
+    version: C
   normalization:
     warmup: 10
   add_device_load: True
@@ -35,6 +35,7 @@ network:
     add_progress: True
 
 wandb:
-  name: CNN-A_IEFT
+  name: GNN-Circle
 
-arch: cnn
+
+arch: gnn

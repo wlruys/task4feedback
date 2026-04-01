@@ -4,6 +4,7 @@ import subprocess
 import time
 import os
 import shutil
+import itertools
 from tqdm import tqdm
 from task4feedback.experiment_helper.run_name import calculate_ratio
 
@@ -194,6 +195,26 @@ def parse_mem(mem_str):
     return int(float(mem_str))
 
 
+def is_sweep_sequence(value):
+    return isinstance(value, (list, tuple))
+
+
+def split_sweep_fields(mapping, skip_keys=None):
+    skip_keys = set() if skip_keys is None else set(skip_keys)
+    scalar_fields = {}
+    sweep_fields = {}
+
+    for key, value in mapping.items():
+        if key in skip_keys:
+            scalar_fields[key] = value
+        elif is_sweep_sequence(value):
+            sweep_fields[key] = value
+        else:
+            scalar_fields[key] = value
+
+    return scalar_fields, sweep_fields
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
@@ -239,8 +260,11 @@ def main():
     # exclude known structural keys
     exclude_keys = {"experiments", "command_template", "cores_per_job", "seed_start", "seed_step", "num_seeds", "start_mem", "end_mem", "step_mem", "global_params", "sweeps"}
 
-    # Create a base context from top-level config items
-    base_context = {k: v for k, v in config.items() if k not in exclude_keys}
+    # Create a base context from top-level config items.
+    # List-valued entries are treated as sweep dimensions instead of being
+    # stringified directly into command templates.
+    base_context_raw = {k: v for k, v in config.items() if k not in exclude_keys}
+    base_context, base_sweeps = split_sweep_fields(base_context_raw)
     base_context.update(global_params)
 
     for seed_offset in range(num_seeds):
@@ -288,22 +312,32 @@ def main():
                 if not final_mem_points:
                     final_mem_points = [None]  # Dummy to run loop once
 
-                # Handle other sweeps if present
-                sweeps = params.get("sweeps", config.get("sweeps", {}))
-                import itertools
+                # Handle other sweeps if present, including list-valued config
+                # fields like arch=["cnn", "gnn"].
+                param_context, param_sweeps = split_sweep_fields(
+                    params,
+                    skip_keys={"mem", "sweeps"},
+                )
+                explicit_sweeps = params.get("sweeps", config.get("sweeps", {}))
+                combined_sweeps = {
+                    **base_sweeps,
+                    **param_sweeps,
+                    **explicit_sweeps,
+                }
 
-                keys = sweeps.keys()
-                values = sweeps.values()
+                sweep_keys = list(combined_sweeps.keys())
+                sweep_values = [combined_sweeps[key] for key in sweep_keys]
+                sweep_bundles = itertools.product(*sweep_values) if sweep_keys else [()]
 
-                for bundle in itertools.product(*values):
-                    sweep_context = dict(zip(keys, bundle))
+                for bundle in sweep_bundles:
+                    sweep_context = dict(zip(sweep_keys, bundle))
 
                     for mem_val in final_mem_points:
                         context = {
                             "exp_name": exp_name,
                             "seed_val": current_seed,
                             **base_context,
-                            **params,
+                            **param_context,
                             **sweep_context,
                         }
 

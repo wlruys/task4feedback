@@ -37,7 +37,7 @@ def configure_training(cfg: DictConfig):
     folder_name, graph_name, interior_str, boundary_str = make_folder_name(cfg)
 
     # Define the file path consistently
-    file_path = f"./pickled_evaluation/{cfg.feature.observer.version}/{folder_name}.pkl"
+    file_path = f"./pickled_evaluation/{folder_name}.pkl"
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     cfg.graph.config.steps *= extend

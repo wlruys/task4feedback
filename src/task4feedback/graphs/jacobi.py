@@ -381,7 +381,7 @@ class JacobiGraph(ComputeDataGraph):
 
                 read_blocks = interior_edges + exterior_edges + [interior_block]
                 write_blocks = next_interior_edges + [next_interior_block]
-                prev_interiors[(cell, i)] = interior_edges + [interior_block]
+                prev_interiors[(cell, i)] = interior_edges
                 self.add_read_data(task_id, read_blocks)
                 self.add_write_data(task_id, write_blocks)
 
@@ -401,9 +401,11 @@ class JacobiGraph(ComputeDataGraph):
                     system is not None
                     and data_req > system.arch_to_maxmem[DeviceType.GPU] / 2
                 ):
-                    print(
-                        f"Warning: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds half of the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB"
-                    )
+                    if not getattr(self, "warned_large", False):
+                        print(
+                            f"Warning: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds half of the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB"
+                        )
+                        self.warned_large = True
                 elif (
                     system is not None
                     and data_req > system.arch_to_maxmem[DeviceType.GPU]
@@ -421,8 +423,10 @@ class JacobiGraph(ComputeDataGraph):
                 #     print(f"Next interior size: {self.data.blocks.data.get_size(next_interior_block)/1e9}")
                 #     print(f"Next interior edges size: {[self.data.blocks.data.get_size(e)/1e9 for e in next_interior_edges]} = {sum([self.data.blocks.data.get_size(e)/1e9 for e in next_interior_edges])}")
 
-                if i > 0 and retire_data:
-                    self.add_retire_data(task_id, prev_interiors[(cell, i - 1)])
+                if retire_data:
+                    self.add_retire_data(task_id, [interior_block])
+                    if i > 0:
+                        self.add_retire_data(task_id, prev_interiors[(cell, i - 1)])
 
     def _build_reference_partition(
         self, config: JacobiConfig, system: System | None
@@ -1578,6 +1582,42 @@ class CandidateExternalObserverFactory(ExternalObserverFactory):
         )
 
 
+@dataclass(kw_only=True)
+class CandidateGNNExternalObserverFactory(ExternalObserverFactory):
+    def create(self, simulator: SimulatorDriver):
+        state = simulator.get_state()
+        graph_spec = self.graph_spec
+        graph_extractor = self.graph_extractor_t(state)
+        task_feature_extractor = self.task_feature_factory.create(state)
+        data_feature_extractor = self.data_feature_factory.create(state)
+        device_feature_extractor = self.device_feature_factory.create(state)
+        task_task_feature_extractor = self.task_task_feature_factory.create(state)
+        task_data_feature_extractor = self.task_data_feature_factory.create(state)
+        task_device_feature_extractor = (
+            self.task_device_feature_factory.create(state)
+            if self.task_device_feature_factory is not None
+            else None
+        )
+        data_device_feature_extractor = (
+            self.data_device_feature_factory.create(state)
+            if self.data_device_feature_factory is not None
+            else None
+        )
+
+        return CandidateGNNObserver(
+            simulator,
+            graph_spec,
+            graph_extractor,
+            task_feature_extractor,
+            data_feature_extractor,
+            device_feature_extractor,
+            task_task_feature_extractor,
+            task_data_feature_extractor,
+            task_device_feature_extractor,
+            data_device_feature_extractor,
+        )
+
+
 class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
     def __init__(
         self,
@@ -1679,6 +1719,72 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
         super().__init__(
             spec,
             graph_extractor_t,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+        )
+
+
+class CandidateTaskGNNObserverFactory(CandidateGNNExternalObserverFactory):
+    def __init__(
+        self,
+        spec: fastsim.GraphSpec,
+        width: int,
+        length: int,
+        prev_frames: int,
+        version: str,
+        graph_override: bool = False,
+        grid_override: bool | None = None,
+        **_ignored,
+    ):
+        if grid_override is not None:
+            graph_override = grid_override
+        self.graph_override = bool(graph_override)
+        if self.graph_override and not (spec.max_candidates == width * length):
+            raise ValueError(
+                f"When graph_override is True, max_candidates must be {width * length}, "
+                f"but got {spec.max_candidates}"
+            )
+
+        task_feature_factory = FeatureExtractorFactory()
+        if "A" in version:
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+        elif "B" in version:
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+            task_feature_factory.add(fastsim.ReadDataLocationFeature)
+        elif "C" in version:
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+            task_feature_factory.add(fastsim.ReadDataLocationFeature)
+            task_feature_factory.add(fastsim.TaskReadCoordinateFeature)
+
+        data_feature_factory = FeatureExtractorFactory()
+        data_feature_factory.add(fastsim.EmptyDataFeature, 1)
+
+        device_feature_factory = FeatureExtractorFactory()
+        device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        task_task_feature_factory.add(fastsim.EmptyTaskTaskFeature, 1)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        task_data_feature_factory.add(fastsim.EmptyTaskDataFeature, 1)
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        data_device_feature_factory = EdgeFeatureExtractorFactory()
+        data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
+
+        super().__init__(
+            spec,
+            fastsim.GraphExtractor,
             task_feature_factory,
             data_feature_factory,
             device_feature_factory,

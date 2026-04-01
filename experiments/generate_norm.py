@@ -1,34 +1,23 @@
+import os
+import pickle
+import random
+from pathlib import Path
+
 import hydra
-from omegaconf import DictConfig, OmegaConf
-import wandb
-from hydra.utils import instantiate
-
-from task4feedback.experiment_helper.graph import make_graph_builder
-from task4feedback.experiment_helper.env import make_env
-from task4feedback.experiment_helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
-from task4feedback.experiment_helper.algorithm import create_optimizer, create_lr_scheduler
-from task4feedback.experiment_helper.run_name import make_folder_name
-
-from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
-from task4feedback.interface.wrappers import *
-from task4feedback.ml.models import *
+import numpy
+import torch
 
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
+from omegaconf import DictConfig, OmegaConf, open_dict
 
-from hydra.experimental.callbacks import Callback
-from hydra.core.utils import JobReturn
-from omegaconf import DictConfig, open_dict
-from pathlib import Path
-import git
-import os
-from hydra.core.hydra_config import HydraConfig
-from task4feedback.experiment_helper.run_name import make_run_name, cfg_hash
-
-import torch
-import numpy
-import random
-import pickle
+from task4feedback.experiment_helper.env import make_env
+from task4feedback.experiment_helper.graph import make_graph_builder
+from task4feedback.experiment_helper.run_name import (
+    make_folder_name,
+)
+from task4feedback.interface.wrappers import *
+from task4feedback.ml.models import *
 
 
 def configure_training(cfg: DictConfig, normalization=None):
@@ -36,10 +25,9 @@ def configure_training(cfg: DictConfig, normalization=None):
     run_name, _, _, _ = make_folder_name(cfg)
     graph_builder = make_graph_builder(cfg)
     env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
-    norm_dir = os.path.join("./norms", run_name)
-    os.makedirs(norm_dir, exist_ok=True)
+    os.makedirs("./norms", exist_ok=True)
 
-    with open(os.path.join(norm_dir, f"{cfg.feature.observer.version}_norm.pkl"), "wb") as f:
+    with open(os.path.join("./norms", f"{run_name}.pkl"), "wb") as f:
         pickle.dump(normalization, f)
 
 
@@ -60,12 +48,19 @@ def main(cfg: DictConfig):
         raise ValueError("Unknown network type in cfg.network.layers.state._target_")
 
     if cfg.graph.mesh._target_ == "task4feedback.graphs.mesh.generate_quad_mesh":
-
         run_name, _, _, _ = make_folder_name(cfg)
 
-        checkpoint_path = Path(cfg.wandb.dir).parent / "model_checkpoints" / f"{run_name}"
-        cfg.eval.pickle_path = f"./pickled_evaluation/{cfg.feature.observer.version}/{run_name}.pkl"
-        cfg.eval.expert_path = f"./dataset/{run_name}/{cfg.eval.expert_path}.pkl" if cfg.eval.expert_path is not None else None
+        checkpoint_path = (
+            Path(cfg.wandb.dir).parent / "model_checkpoints" / f"{run_name}"
+        )
+        cfg.eval.pickle_path = (
+            f"./pickled_evaluation/{cfg.feature.observer.version}/{run_name}.pkl"
+        )
+        cfg.eval.expert_path = (
+            f"./dataset/{run_name}/{cfg.eval.expert_path}.pkl"
+            if cfg.eval.expert_path is not None
+            else None
+        )
         norm_path = f"./norms/{run_name}/{cfg.feature.observer.version}_norm.pkl"
 
         if not os.path.exists(cfg.eval.pickle_path):

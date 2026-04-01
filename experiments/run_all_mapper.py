@@ -360,7 +360,7 @@ def configure_training(cfg: DictConfig):
         )
         graph = env.get_graph()
         hand_calculated_peak = (
-            3 * graph.data.data_stat["average_step_data"] / (cfg.system.n_devices - 1)
+            0.5 * graph.data.data_stat["average_step_data"] / (cfg.system.n_devices - 1)
         )
         print(f"Hand-calculated peak: {hand_calculated_peak / 1e9:.1f} GB")
         if hand_calculated_peak > SYSTEM_MEMORY * 1.5:

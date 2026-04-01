@@ -36,12 +36,7 @@ def configure_training(cfg: DictConfig, normalization=None):
     graph_builder = make_graph_builder(cfg)
     if normalization is None:
         env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
-        norm_dir = os.path.join("./norms", run_name)
-        os.makedirs(norm_dir, exist_ok=True)
-
-        with open(
-            os.path.join(norm_dir, f"{cfg.feature.observer.version}_norm.pkl"), "wb"
-        ) as f:
+        with open(os.path.join("./norms", f"{run_name}.pkl"), "wb") as f:
             pickle.dump(normalization, f)
     else:
         env = make_env(
@@ -49,7 +44,7 @@ def configure_training(cfg: DictConfig, normalization=None):
         )
     observer = env.get_observer()
     feature_config = FeatureDimConfig.from_observer(observer)
-    model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
+    model, _, lstm = create_td_actor_critic_models(cfg, feature_config)
 
     if cfg.get("load_policy", None):
         ckpt_path = Path(cfg.load_policy)
@@ -147,15 +142,13 @@ def main(cfg: DictConfig):
         best_policy_dir = Path(cfg.wandb.dir).parent / "best_policies" / f"{run_name}"
         checkpoint_dir = Path(cfg.wandb.dir).parent / "checkpoints" / f"{run_name}"
 
-        cfg.eval.pickle_path = (
-            f"./pickled_evaluation/{cfg.feature.observer.version}/{run_name}.pkl"
-        )
+        cfg.eval.pickle_path = f"./pickled_evaluation/{run_name}.pkl"
         cfg.eval.expert_path = (
             f"./dataset/{run_name}/{cfg.eval.expert_path}.pkl"
             if cfg.eval.expert_path is not None
             else None
         )
-        norm_path = f"./norms/{run_name}/{cfg.feature.observer.version}_norm.pkl"
+        norm_path = f"./norms/{run_name}.pkl"
 
         if not os.path.exists(cfg.eval.pickle_path):
             print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
@@ -173,6 +166,9 @@ def main(cfg: DictConfig):
             print(f"Loading normalization from {norm_path}")
             normalization = pickle.load(open(norm_path, "rb"))
         else:
+            print(
+                f"No normalization file found at {norm_path}. Generating new normalization."
+            )
             normalization = None
 
         # Make a dir if not exists
