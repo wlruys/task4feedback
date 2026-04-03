@@ -20,6 +20,7 @@ target_sources(backend
         include/kahypar_wrapper.hpp
         include/iterator.hpp
         include/macros.hpp
+        include/metis_wrapper.hpp
         include/noise.hpp
         include/queues.hpp
         include/resources.hpp
@@ -85,6 +86,32 @@ endif()
 
 if(ENABLE_PARMETIS)
   target_compile_definitions(backend PUBLIC ENABLE_PARMETIS)
+endif()
+
+if(ENABLE_METIS)
+  set(METIS_PREFIX $ENV{METIS_INSTALL_PATH})
+  if(NOT METIS_PREFIX)
+    message(FATAL_ERROR "ENV METIS_INSTALL_PATH is not set. Set it to the install prefix that contains include/ and lib/.")
+  endif()
+
+  find_path(METIS_INCLUDE_DIR NAMES metis.h HINTS ${METIS_PREFIX}/include)
+  find_library(METIS_LIBRARY NAMES metis METIS HINTS ${METIS_PREFIX}/lib)
+
+  if(NOT METIS_INCLUDE_DIR OR NOT METIS_LIBRARY)
+    message(FATAL_ERROR "Could not find METIS under ${METIS_PREFIX}.\n"
+                        "Checked ${METIS_PREFIX}/include and ${METIS_PREFIX}/lib.")
+  endif()
+
+  if(NOT TARGET METIS::METIS)
+    add_library(METIS::METIS SHARED IMPORTED)
+    set_target_properties(METIS::METIS PROPERTIES
+      IMPORTED_LOCATION "${METIS_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${METIS_INCLUDE_DIR}")
+  endif()
+
+  target_link_libraries(backend PUBLIC METIS::METIS)
+  target_include_directories(backend PUBLIC ${METIS_INCLUDE_DIR})
+  target_compile_definitions(backend PUBLIC ENABLE_METIS)
 endif()
 
 if(ENABLE_KAHYPAR)

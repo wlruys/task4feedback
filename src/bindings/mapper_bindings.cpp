@@ -102,12 +102,23 @@ void init_mapper_ext(nb::module_ &m) {
       .def(nb::init<>())
       .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
       .def(nb::init<KaHyParMapper &>(), "other"_a)
-      .def_rw("mapped_threshold", &KaHyParMapper::mapped_threshold)
-      .def_rw("reserved_threshold", &KaHyParMapper::reserved_threshold)
       .def("map_task", &KaHyParMapper::map_task, "task_id"_a, "state"_a)
       .def(
           "map_tasks",
           [](KaHyParMapper &mapper, const TaskIDList &tasks,
+             const SchedulerState &state) -> ActionList & {
+            return mapper.map_tasks(std::span<const taskid_t>(tasks), state);
+          },
+          "tasks"_a, "state"_a, nb::rv_policy::reference_internal);
+
+  nb::class_<METISMapper, EFTMapper>(m, "METISMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
+      .def(nb::init<METISMapper &>(), "other"_a)
+      .def("map_task", &METISMapper::map_task, "task_id"_a, "state"_a)
+      .def(
+          "map_tasks",
+          [](METISMapper &mapper, const TaskIDList &tasks,
              const SchedulerState &state) -> ActionList & {
             return mapper.map_tasks(std::span<const taskid_t>(tasks), state);
           },
@@ -122,6 +133,9 @@ void init_mapper_ext(nb::module_ &m) {
       .def_prop_rw("reserved_threshold", &DARTSMapper::get_reserved_threshold,
                    &DARTSMapper::set_reserved_threshold)
       .def_rw("extended_frontier_enabled", &DARTSMapper::extended_frontier_enabled)
+      .def_rw("extended_batch_emission_enabled", &DARTSMapper::extended_batch_emission_enabled)
+      .def_prop_rw("extended_batch_emission_cap", &DARTSMapper::get_extended_batch_emission_cap,
+                   &DARTSMapper::set_extended_batch_emission_cap)
       .def_rw("trace_decisions", &DARTSMapper::trace_decisions)
       .def("set_thresholds", &DARTSMapper::set_thresholds, "mapped_threshold"_a,
            "reserved_threshold"_a)

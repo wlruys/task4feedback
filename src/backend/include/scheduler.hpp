@@ -9,6 +9,7 @@
 #include "kahypar_wrapper.hpp"
 #include "iterator.hpp"
 #include "macros.hpp"
+#include "metis_wrapper.hpp"
 #include "noise.hpp"
 #include "queues.hpp"
 #include "resources.hpp"
@@ -465,6 +466,10 @@ public:
 
   [[nodiscard]] auto n_reserved(devid_t device_id) const {
     return per_device_counts[reserved_offset * n_devices + device_id];
+  }
+
+  [[nodiscard]] auto n_unreserved_mapped(devid_t device_id) const {
+    return n_mapped(device_id) - n_reserved(device_id);
   }
 
   [[nodiscard]] auto n_launched(devid_t device_id) const {
@@ -1605,7 +1610,7 @@ public:
   [[nodiscard]] bool is_device_under_threshold(const SchedulerState &state,
                                                devid_t device_id) const {
     if (has_mapped_threshold()) {
-      return state.counts.n_mapped(device_id) <= mapped_threshold_;
+      return state.counts.n_unreserved_mapped(device_id) <= mapped_threshold_;
     }
     if (has_reserved_threshold()) {
       return state.counts.n_reserved(device_id) <= reserved_threshold_;
@@ -3013,9 +3018,18 @@ private:
 
   struct PartitionRec {
     int32_t label = -1;
+    int32_t aligned_label = -1;
     std::vector<int32_t> candidate_indices;
     DataIDList unique_read_data;
     priority_t total_priority = 0;
+    taskid_t min_task_id = -1;
+    devid_t previous_device = -1;
+  };
+
+  struct HistoricalPartitionRec {
+    int32_t aligned_label = -1;
+    DataIDList unique_read_data;
+    devid_t device_id = -1;
     taskid_t min_task_id = -1;
   };
 
@@ -3032,7 +3046,10 @@ private:
   std::vector<devid_t> partition_devices;
   std::vector<devid_t> eligible_devices_buffer;
   std::vector<timecount_t> batch_device_available_time;
+  ankerl::unordered_dense::map<dataid_t, timecount_t> average_transfer_cost_cache;
+  std::vector<HistoricalPartitionRec> previous_partitions;
   KaHyParHypergraph last_hypergraph;
+  int32_t next_aligned_label = 0;
 
   void ensure_scratch_sizes(std::size_t n_candidates, std::size_t n_compute_tasks,
                             std::size_t n_devices) {
@@ -3043,6 +3060,7 @@ private:
     partition_labels.reserve(n_candidates);
     partitions.reserve(n_candidates);
     eligible_devices_buffer.reserve(n_devices);
+    average_transfer_cost_cache.reserve(n_candidates);
 
     if (task_to_candidate_index.size() < n_compute_tasks) {
       task_to_candidate_index.resize(n_compute_tasks, -1);
@@ -3070,12 +3088,6 @@ private:
     touched_gpu_tasks.clear();
   }
 
-  [[nodiscard]] bool task_supports_device(const CandidateRec &candidate,
-                                          devid_t device_id) const {
-    return std::binary_search(candidate.supported_devices.begin(), candidate.supported_devices.end(),
-                              device_id);
-  }
-
   void collect_eligible_devices(const SchedulerState &state) {
     eligible_devices_buffer.clear();
     const auto n_devices = state.get_devices().size();
@@ -3083,11 +3095,14 @@ private:
       if (state.get_devices().get_type(device_id) != DeviceType::GPU) {
         continue;
       }
-      if (state.counts.n_mapped(device_id) <= mapped_threshold ||
-          state.counts.n_reserved(device_id) <= reserved_threshold) {
-        eligible_devices_buffer.push_back(device_id);
-      }
+      eligible_devices_buffer.push_back(device_id);
     }
+  }
+
+  void reset_partition_history() {
+    average_transfer_cost_cache.clear();
+    previous_partitions.clear();
+    next_aligned_label = 0;
   }
 
   void prepare_candidates(std::span<const taskid_t> task_ids, const SchedulerState &state) {
@@ -3095,6 +3110,7 @@ private:
     candidate_records.clear();
     vertex_to_candidate_index.clear();
     last_hypergraph.clear();
+    average_transfer_cost_cache.clear();
 
     const auto n_compute_tasks =
         static_cast<std::size_t>(state.get_tasks().get_n_compute_tasks());
@@ -3152,6 +3168,34 @@ private:
     last_hypergraph.num_vertices = static_cast<int32_t>(vertex_to_candidate_index.size());
   }
 
+  [[nodiscard]] timecount_t average_transfer_cost_for_data(dataid_t data_id,
+                                                           const SchedulerState &state) {
+    if (const auto it = average_transfer_cost_cache.find(data_id);
+        it != average_transfer_cost_cache.end()) {
+      return it->second;
+    }
+
+    if (eligible_devices_buffer.empty()) {
+      const auto fallback_cost = static_cast<timecount_t>(state.get_data().get_size(data_id));
+      average_transfer_cost_cache.emplace(data_id, fallback_cost);
+      return fallback_cost;
+    }
+
+    timecount_t total_cost = 0;
+    for (const auto device_id : eligible_devices_buffer) {
+      const auto transfer_cost = transfer_time_for_data(data_id, device_id, state);
+      if (transfer_cost >= MAX_TIME) {
+        average_transfer_cost_cache.emplace(data_id, MAX_TIME);
+        return MAX_TIME;
+      }
+      total_cost = saturating_add(total_cost, transfer_cost);
+    }
+
+    const auto average_cost = total_cost / static_cast<timecount_t>(eligible_devices_buffer.size());
+    average_transfer_cost_cache.emplace(data_id, average_cost);
+    return average_cost;
+  }
+
   void build_hypergraph(const SchedulerState &state) {
     if (last_hypergraph.num_vertices <= 0) {
       return;
@@ -3193,8 +3237,8 @@ private:
             static_cast<int32_t>(last_hypergraph.eind.size() - edge_begin);
         if (edge_size >= 2) {
           last_hypergraph.eptr.push_back(static_cast<int32_t>(last_hypergraph.eind.size()));
-          last_hypergraph.hewgts.push_back(
-              KaHyPar_wrapper::clamp_weight(static_cast<uint64_t>(data.get_size(data_id))));
+          last_hypergraph.hewgts.push_back(KaHyPar_wrapper::clamp_weight(
+              static_cast<uint64_t>(average_transfer_cost_for_data(data_id, state))));
           last_hypergraph.edge_data_ids.push_back(data_id);
           last_hypergraph.edge_generations.push_back(generation);
         } else {
@@ -3307,6 +3351,7 @@ private:
       if (inserted) {
         PartitionRec rec;
         rec.label = raw_label;
+        rec.aligned_label = raw_label;
         partitions.push_back(std::move(rec));
       }
 
@@ -3328,6 +3373,95 @@ private:
       partition.unique_read_data.erase(
           std::unique(partition.unique_read_data.begin(), partition.unique_read_data.end()),
           partition.unique_read_data.end());
+    }
+  }
+
+  [[nodiscard]] timecount_t weighted_data_overlap(std::span<const dataid_t> lhs,
+                                                  std::span<const dataid_t> rhs,
+                                                  const SchedulerState &state) {
+    std::size_t lhs_index = 0;
+    std::size_t rhs_index = 0;
+    timecount_t overlap = 0;
+
+    while (lhs_index < lhs.size() && rhs_index < rhs.size()) {
+      const auto lhs_data = lhs[lhs_index];
+      const auto rhs_data = rhs[rhs_index];
+      if (lhs_data == rhs_data) {
+        overlap = saturating_add(overlap, average_transfer_cost_for_data(lhs_data, state));
+        ++lhs_index;
+        ++rhs_index;
+      } else if (lhs_data < rhs_data) {
+        ++lhs_index;
+      } else {
+        ++rhs_index;
+      }
+    }
+
+    return overlap;
+  }
+
+  void align_partitions(const SchedulerState &state) {
+    if (partitions.empty()) {
+      return;
+    }
+
+    struct AlignmentChoice {
+      std::size_t current_partition = 0;
+      std::size_t previous_partition = 0;
+      timecount_t overlap = 0;
+    };
+
+    std::vector<AlignmentChoice> choices;
+    choices.reserve(partitions.size() * previous_partitions.size());
+    for (std::size_t current_index = 0; current_index < partitions.size(); ++current_index) {
+      auto &partition = partitions[current_index];
+      partition.previous_device = -1;
+      for (std::size_t previous_index = 0; previous_index < previous_partitions.size();
+           ++previous_index) {
+        const auto overlap = weighted_data_overlap(partition.unique_read_data,
+                                                   previous_partitions[previous_index].unique_read_data,
+                                                   state);
+        if (overlap > 0) {
+          choices.push_back({current_index, previous_index, overlap});
+        }
+      }
+    }
+
+    std::sort(choices.begin(), choices.end(), [&](const AlignmentChoice &lhs,
+                                                  const AlignmentChoice &rhs) {
+      if (lhs.overlap != rhs.overlap) {
+        return lhs.overlap > rhs.overlap;
+      }
+      const auto lhs_label = previous_partitions[lhs.previous_partition].aligned_label;
+      const auto rhs_label = previous_partitions[rhs.previous_partition].aligned_label;
+      if (lhs_label != rhs_label) {
+        return lhs_label < rhs_label;
+      }
+      return partitions[lhs.current_partition].min_task_id <
+             partitions[rhs.current_partition].min_task_id;
+    });
+
+    std::vector<uint8_t> current_matched(partitions.size(), 0);
+    std::vector<uint8_t> previous_matched(previous_partitions.size(), 0);
+    for (const auto &choice : choices) {
+      if (current_matched[choice.current_partition] ||
+          previous_matched[choice.previous_partition]) {
+        continue;
+      }
+
+      auto &partition = partitions[choice.current_partition];
+      const auto &previous = previous_partitions[choice.previous_partition];
+      partition.aligned_label = previous.aligned_label;
+      partition.previous_device = previous.device_id;
+      current_matched[choice.current_partition] = 1;
+      previous_matched[choice.previous_partition] = 1;
+    }
+
+    for (auto &partition : partitions) {
+      if (partition.aligned_label >= 0 && partition.previous_device >= 0) {
+        continue;
+      }
+      partition.aligned_label = next_aligned_label++;
     }
   }
 
@@ -3377,8 +3511,18 @@ private:
 
     const auto lhs_device_id = eligible_devices_buffer[lhs_device];
     const auto rhs_device_id = eligible_devices_buffer[rhs_device];
+    const bool lhs_matches_previous = partitions[lhs_partition].previous_device == lhs_device_id;
+    const bool rhs_matches_previous = partitions[rhs_partition].previous_device == rhs_device_id;
+    if (lhs_matches_previous != rhs_matches_previous) {
+      return lhs_matches_previous;
+    }
+
     if (lhs_device_id != rhs_device_id) {
       return lhs_device_id < rhs_device_id;
+    }
+
+    if (partitions[lhs_partition].aligned_label != partitions[rhs_partition].aligned_label) {
+      return partitions[lhs_partition].aligned_label < partitions[rhs_partition].aligned_label;
     }
 
     return partitions[lhs_partition].min_task_id < partitions[rhs_partition].min_task_id;
@@ -3428,6 +3572,9 @@ private:
                 if (partition_devices[lhs] != partition_devices[rhs]) {
                   return partition_devices[lhs] < partition_devices[rhs];
                 }
+                if (partitions[lhs].aligned_label != partitions[rhs].aligned_label) {
+                  return partitions[lhs].aligned_label < partitions[rhs].aligned_label;
+                }
                 return partitions[lhs].min_task_id < partitions[rhs].min_task_id;
               });
 
@@ -3455,6 +3602,26 @@ private:
     }
   }
 
+  void persist_partition_history() {
+    previous_partitions.clear();
+    previous_partitions.reserve(partitions.size());
+    for (std::size_t partition_index = 0; partition_index < partitions.size(); ++partition_index) {
+      HistoricalPartitionRec rec;
+      rec.aligned_label = partitions[partition_index].aligned_label;
+      rec.unique_read_data = partitions[partition_index].unique_read_data;
+      rec.device_id = partition_devices[partition_index];
+      rec.min_task_id = partitions[partition_index].min_task_id;
+      previous_partitions.push_back(std::move(rec));
+    }
+    std::sort(previous_partitions.begin(), previous_partitions.end(),
+              [](const HistoricalPartitionRec &lhs, const HistoricalPartitionRec &rhs) {
+                if (lhs.aligned_label != rhs.aligned_label) {
+                  return lhs.aligned_label < rhs.aligned_label;
+                }
+                return lhs.min_task_id < rhs.min_task_id;
+              });
+  }
+
   ActionList &plan_tasks(std::span<const taskid_t> task_ids, const SchedulerState &state) {
     action_buffer.clear();
     action_buffer.reserve(task_ids.size());
@@ -3467,6 +3634,7 @@ private:
     ensure_task_buffers_size(static_cast<std::size_t>(state.get_tasks().get_n_compute_tasks()));
     if (should_reset_for_new_run(state)) {
       reset_task_buffers();
+      reset_partition_history();
     }
 
     prepare_candidates(task_ids, state);
@@ -3511,16 +3679,15 @@ private:
     }
 
     build_partitions(state);
+    align_partitions(state);
     assign_partition_devices(state);
+    persist_partition_history();
     emit_partition_actions(state);
     emit_fallback_actions(fallback_candidate_indices, state);
     return action_buffer;
   }
 
 public:
-  int32_t mapped_threshold = 0;
-  int32_t reserved_threshold = 0;
-
   KaHyParMapper() {
 #ifndef ENABLE_KAHYPAR
     throw std::runtime_error("KaHyParMapper requires ENABLE_KAHYPAR at build time");
@@ -3548,6 +3715,683 @@ public:
 
   [[nodiscard]] const KaHyParHypergraph &get_last_hypergraph() const {
     return last_hypergraph;
+  }
+
+  Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    auto &actions = plan_tasks(std::span<const taskid_t>(&task_id, 1), state);
+    T4F_INVARIANT(actions.size() == 1);
+    return actions.front();
+  }
+
+  ActionList &map_tasks(std::span<const taskid_t> task_ids, const SchedulerState &state) override {
+    return plan_tasks(task_ids, state);
+  }
+};
+
+class METISMapper : public EFTMapper {
+private:
+  struct CandidateRec {
+    taskid_t task_id = -1;
+    std::size_t input_pos = 0;
+    priority_t priority = 0;
+    DeviceIDList supported_devices;
+    int32_t gpu_vertex = -1;
+    bool gpu_eligible = false;
+  };
+
+  struct PartitionRec {
+    int32_t label = -1;
+    std::vector<int32_t> candidate_indices;
+    DataIDList unique_read_data;
+    priority_t total_priority = 0;
+    taskid_t min_task_id = -1;
+  };
+
+  struct AssignmentSolution {
+    bool feasible = false;
+    timecount_t total_cost = MAX_TIME;
+    std::vector<uint8_t> device_suffix;
+  };
+
+  METIS_wrapper metis;
+  std::vector<CandidateRec> candidate_records;
+  std::vector<int32_t> task_to_candidate_index;
+  std::vector<int32_t> task_to_gpu_vertex;
+  TaskIDList touched_candidate_tasks;
+  TaskIDList touched_gpu_tasks;
+  std::vector<int32_t> vertex_to_candidate_index;
+  std::vector<int32_t> partition_labels;
+  std::vector<PartitionRec> partitions;
+  std::vector<timecount_t> partition_costs;
+  std::vector<devid_t> partition_devices;
+  std::vector<devid_t> eligible_devices_buffer;
+  std::vector<timecount_t> batch_device_available_time;
+  std::vector<std::size_t> assignment_partition_order;
+  std::vector<AssignmentSolution> assignment_memo;
+  std::vector<uint8_t> assignment_memo_ready;
+  MetisGraph last_graph;
+
+  void ensure_scratch_sizes(std::size_t n_candidates, std::size_t n_compute_tasks,
+                            std::size_t n_devices) {
+    candidate_records.reserve(n_candidates);
+    touched_candidate_tasks.reserve(n_candidates);
+    touched_gpu_tasks.reserve(n_candidates);
+    vertex_to_candidate_index.reserve(n_candidates);
+    partition_labels.reserve(n_candidates);
+    partitions.reserve(n_candidates);
+    eligible_devices_buffer.reserve(n_devices);
+    assignment_partition_order.reserve(n_candidates);
+
+    if (task_to_candidate_index.size() < n_compute_tasks) {
+      task_to_candidate_index.resize(n_compute_tasks, -1);
+    }
+    if (task_to_gpu_vertex.size() < n_compute_tasks) {
+      task_to_gpu_vertex.resize(n_compute_tasks, -1);
+    }
+    if (batch_device_available_time.size() < n_devices) {
+      batch_device_available_time.resize(n_devices, 0);
+    }
+  }
+
+  void clear_candidate_maps() {
+    for (const auto task_id : touched_candidate_tasks) {
+      const auto idx = static_cast<std::size_t>(task_id);
+      T4F_INVARIANT(idx < task_to_candidate_index.size());
+      task_to_candidate_index[idx] = -1;
+    }
+    for (const auto task_id : touched_gpu_tasks) {
+      const auto idx = static_cast<std::size_t>(task_id);
+      T4F_INVARIANT(idx < task_to_gpu_vertex.size());
+      task_to_gpu_vertex[idx] = -1;
+    }
+    touched_candidate_tasks.clear();
+    touched_gpu_tasks.clear();
+  }
+
+  void collect_eligible_devices(const SchedulerState &state) {
+    eligible_devices_buffer.clear();
+    const auto n_devices = state.get_devices().size();
+    for (devid_t device_id = 1; device_id < n_devices; ++device_id) {
+      if (state.get_devices().get_type(device_id) != DeviceType::GPU) {
+        continue;
+      }
+      eligible_devices_buffer.push_back(device_id);
+    }
+  }
+
+  void prepare_candidates(std::span<const taskid_t> task_ids, const SchedulerState &state) {
+    clear_candidate_maps();
+    candidate_records.clear();
+    vertex_to_candidate_index.clear();
+    last_graph.clear();
+
+    const auto n_compute_tasks =
+        static_cast<std::size_t>(state.get_tasks().get_n_compute_tasks());
+    const auto n_devices = static_cast<std::size_t>(state.get_devices().size());
+    ensure_scratch_sizes(task_ids.size(), n_compute_tasks, n_devices);
+    collect_eligible_devices(state);
+
+    for (std::size_t input_pos = 0; input_pos < task_ids.size(); ++input_pos) {
+      const auto task_id = task_ids[input_pos];
+      CandidateRec candidate;
+      candidate.task_id = task_id;
+      candidate.input_pos = input_pos;
+      candidate.priority = state.get_mapping_priority(task_id);
+      fill_device_targets(task_id, state);
+      candidate.supported_devices = device_buffer;
+      T4F_INVARIANT(!candidate.supported_devices.empty());
+
+      for (const auto device_id : candidate.supported_devices) {
+        if (device_id > 0 && std::binary_search(eligible_devices_buffer.begin(),
+                                                eligible_devices_buffer.end(), device_id)) {
+          candidate.gpu_eligible = true;
+          break;
+        }
+      }
+
+      const auto candidate_index = static_cast<int32_t>(candidate_records.size());
+      candidate_records.push_back(std::move(candidate));
+
+      const auto task_idx = static_cast<std::size_t>(task_id);
+      T4F_INVARIANT(task_idx < task_to_candidate_index.size());
+      task_to_candidate_index[task_idx] = candidate_index;
+      touched_candidate_tasks.push_back(task_id);
+    }
+
+    for (auto &candidate : candidate_records) {
+      if (!candidate.gpu_eligible) {
+        continue;
+      }
+      candidate.gpu_vertex = static_cast<int32_t>(vertex_to_candidate_index.size());
+      vertex_to_candidate_index.push_back(
+          task_to_candidate_index[static_cast<std::size_t>(candidate.task_id)]);
+      last_graph.vertex_task_ids.push_back(candidate.task_id);
+      last_graph.vertex_input_positions.push_back(candidate.input_pos);
+      last_graph.vwgts.push_back(METIS_wrapper::clamp_weight(
+          static_cast<uint64_t>(state.get_tasks().get_mean_duration(candidate.task_id,
+                                                                    DeviceType::GPU))));
+
+      const auto task_idx = static_cast<std::size_t>(candidate.task_id);
+      T4F_INVARIANT(task_idx < task_to_gpu_vertex.size());
+      task_to_gpu_vertex[task_idx] = candidate.gpu_vertex;
+      touched_gpu_tasks.push_back(candidate.task_id);
+    }
+
+    last_graph.num_vertices = static_cast<int32_t>(vertex_to_candidate_index.size());
+  }
+
+  [[nodiscard]] timecount_t saturating_add(timecount_t lhs, timecount_t rhs) const {
+    if (lhs >= MAX_TIME || rhs >= MAX_TIME) {
+      return MAX_TIME;
+    }
+    if (lhs > MAX_TIME - rhs) {
+      return MAX_TIME;
+    }
+    return lhs + rhs;
+  }
+
+  [[nodiscard]] timecount_t transfer_time_for_data(dataid_t data_id, devid_t device_id,
+                                                   const SchedulerState &state) const {
+    const auto &data_manager = state.get_data_manager();
+    if (data_manager.check_valid_mapped(data_id, device_id)) {
+      return 0;
+    }
+
+    const auto &communication_manager = state.get_communication_manager();
+    const auto &topology = state.get_topology();
+    const auto flags = data_manager.get_mapped_location_flags(data_id);
+    const auto req = communication_manager.get_best_source(topology, device_id, flags);
+    if (!req.found) {
+      return MAX_TIME;
+    }
+
+    return communication_manager.ideal_time_to_transfer(
+        topology, state.get_data().get_size(data_id), req.source, device_id);
+  }
+
+  [[nodiscard]] timecount_t average_transfer_time_for_data(dataid_t data_id,
+                                                           const SchedulerState &state) const {
+    if (eligible_devices_buffer.empty()) {
+      return MAX_TIME;
+    }
+
+    timecount_t total_cost = 0;
+    for (const auto device_id : eligible_devices_buffer) {
+      total_cost = saturating_add(total_cost, transfer_time_for_data(data_id, device_id, state));
+    }
+    if (total_cost >= MAX_TIME) {
+      return MAX_TIME;
+    }
+    return total_cost / static_cast<timecount_t>(eligible_devices_buffer.size());
+  }
+
+  void build_metis_graph(const SchedulerState &state) {
+    last_graph.xadj.clear();
+    last_graph.adjncy.clear();
+    last_graph.adjwgt.clear();
+    if (last_graph.num_vertices <= 0) {
+      return;
+    }
+
+    const auto &tasks = state.get_tasks();
+    ankerl::unordered_dense::map<uint64_t, uint64_t> edge_weights;
+    edge_weights.reserve(static_cast<std::size_t>(last_graph.num_vertices) * 4);
+    std::vector<int32_t> group_vertices;
+
+    for (const auto data_id : tasks.get_read_usage_data_ids()) {
+      const auto readers = tasks.get_tasks_reading_data_by_gen(data_id);
+      const auto generations = tasks.get_read_generations_for_data(data_id);
+      T4F_INVARIANT(readers.size() == generations.size());
+
+      std::size_t group_begin = 0;
+      while (group_begin < readers.size()) {
+        const auto generation = generations[group_begin];
+        std::size_t group_end = group_begin + 1;
+        while (group_end < readers.size() && generations[group_end] == generation) {
+          ++group_end;
+        }
+
+        group_vertices.clear();
+        for (std::size_t idx = group_begin; idx < group_end; ++idx) {
+          const auto task_id = readers[idx];
+          if (task_id < 0) {
+            continue;
+          }
+          const auto task_idx = static_cast<std::size_t>(task_id);
+          if (task_idx >= task_to_gpu_vertex.size()) {
+            continue;
+          }
+          const auto vertex = task_to_gpu_vertex[task_idx];
+          if (vertex >= 0) {
+            group_vertices.push_back(vertex);
+          }
+        }
+
+        std::sort(group_vertices.begin(), group_vertices.end());
+        group_vertices.erase(std::unique(group_vertices.begin(), group_vertices.end()),
+                             group_vertices.end());
+
+        if (group_vertices.size() >= 2) {
+          const auto avg_transfer_cost = average_transfer_time_for_data(data_id, state);
+          const auto group_weight = METIS_wrapper::clamp_weight(
+              static_cast<uint64_t>(std::max<timecount_t>(avg_transfer_cost, 1)));
+
+          for (std::size_t i = 0; i + 1 < group_vertices.size(); ++i) {
+            for (std::size_t j = i + 1; j < group_vertices.size(); ++j) {
+              const auto lhs = static_cast<uint32_t>(group_vertices[i]);
+              const auto rhs = static_cast<uint32_t>(group_vertices[j]);
+              const auto key = (static_cast<uint64_t>(lhs) << 32) | rhs;
+              auto &accum = edge_weights[key];
+              accum += static_cast<uint64_t>(group_weight);
+            }
+          }
+        }
+
+        group_begin = group_end;
+      }
+    }
+
+    std::vector<std::vector<std::pair<int32_t, int32_t>>> adjacency(
+        static_cast<std::size_t>(last_graph.num_vertices));
+    for (const auto &entry : edge_weights) {
+      const auto lhs = static_cast<int32_t>(entry.first >> 32);
+      const auto rhs = static_cast<int32_t>(entry.first & 0xffffffffU);
+      const auto weight = METIS_wrapper::clamp_weight(entry.second);
+      adjacency[static_cast<std::size_t>(lhs)].push_back({rhs, weight});
+      adjacency[static_cast<std::size_t>(rhs)].push_back({lhs, weight});
+    }
+
+    last_graph.xadj.reserve(static_cast<std::size_t>(last_graph.num_vertices) + 1);
+    last_graph.xadj.push_back(0);
+    for (auto &neighbors : adjacency) {
+      std::sort(neighbors.begin(), neighbors.end(),
+                [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+      for (const auto &[neighbor, weight] : neighbors) {
+        last_graph.adjncy.push_back(neighbor);
+        last_graph.adjwgt.push_back(weight);
+      }
+      last_graph.xadj.push_back(static_cast<int32_t>(last_graph.adjncy.size()));
+    }
+  }
+
+  void reset_batch_device_times(const SchedulerState &state) {
+    const auto n_devices = state.get_devices().size();
+    batch_device_available_time.resize(n_devices, 0);
+    for (devid_t device_id = 0; device_id < n_devices; ++device_id) {
+      batch_device_available_time[static_cast<std::size_t>(device_id)] =
+          EFTMapper::get_device_available_time(device_id, state);
+    }
+  }
+
+  [[nodiscard]] DeviceTime select_best_device(const CandidateRec &candidate,
+                                              const SchedulerState &state) {
+    const auto dep_time = get_dependency_finish_time(candidate.task_id, state);
+    timecount_t best_finish = MAX_TIME;
+    devid_t best_device = candidate.supported_devices.front();
+
+    for (const auto device_id : candidate.supported_devices) {
+      const auto start_time =
+          std::max(batch_device_available_time[static_cast<std::size_t>(device_id)], dep_time);
+      const auto finish_time = get_finish_time(candidate.task_id, device_id, start_time, state);
+      if (finish_time < best_finish || (finish_time == best_finish && device_id < best_device)) {
+        best_finish = finish_time;
+        best_device = device_id;
+      }
+    }
+
+    return {best_device, best_finish};
+  }
+
+  void record_assignment(taskid_t task_id, devid_t device_id, const SchedulerState &state) {
+    const auto dep_time = get_dependency_finish_time(task_id, state);
+    const auto start_time =
+        std::max(batch_device_available_time[static_cast<std::size_t>(device_id)], dep_time);
+    const auto finish_time = get_finish_time(task_id, device_id, start_time, state);
+    record_finish_time(task_id, finish_time, state);
+    batch_device_available_time[static_cast<std::size_t>(device_id)] = finish_time;
+  }
+
+  void emit_fallback_actions(const std::vector<int32_t> &candidate_indices,
+                             const SchedulerState &state) {
+    std::vector<int32_t> ordered = candidate_indices;
+    std::sort(ordered.begin(), ordered.end(), [&](int32_t lhs, int32_t rhs) {
+      const auto &lhs_candidate = candidate_records[static_cast<std::size_t>(lhs)];
+      const auto &rhs_candidate = candidate_records[static_cast<std::size_t>(rhs)];
+      return lhs_candidate.input_pos < rhs_candidate.input_pos;
+    });
+
+    for (const auto candidate_index : ordered) {
+      const auto &candidate = candidate_records[static_cast<std::size_t>(candidate_index)];
+      const auto selection = select_best_device(candidate, state);
+      action_buffer.push_back(
+          Action{candidate.input_pos, selection.device_id, candidate.priority, candidate.priority});
+      record_assignment(candidate.task_id, selection.device_id, state);
+    }
+  }
+
+  void build_partitions(const SchedulerState &state) {
+    partitions.clear();
+    partition_devices.clear();
+    partition_costs.clear();
+
+    ankerl::unordered_dense::map<int32_t, int32_t> partition_index_by_label;
+    partition_index_by_label.reserve(vertex_to_candidate_index.size());
+    const auto &tasks = state.get_tasks();
+
+    for (std::size_t vertex = 0; vertex < vertex_to_candidate_index.size(); ++vertex) {
+      const auto raw_label = partition_labels[vertex];
+      const auto [it, inserted] = partition_index_by_label.try_emplace(
+          raw_label, static_cast<int32_t>(partitions.size()));
+      if (inserted) {
+        PartitionRec rec;
+        rec.label = raw_label;
+        partitions.push_back(std::move(rec));
+      }
+
+      auto &partition = partitions[static_cast<std::size_t>(it->second)];
+      const auto candidate_index = vertex_to_candidate_index[vertex];
+      const auto &candidate = candidate_records[static_cast<std::size_t>(candidate_index)];
+      partition.candidate_indices.push_back(candidate_index);
+      partition.total_priority += candidate.priority;
+      if (partition.min_task_id < 0 || candidate.task_id < partition.min_task_id) {
+        partition.min_task_id = candidate.task_id;
+      }
+
+      const auto reads = tasks.get_read(candidate.task_id);
+      partition.unique_read_data.insert(partition.unique_read_data.end(), reads.begin(), reads.end());
+    }
+
+    for (auto &partition : partitions) {
+      std::sort(partition.unique_read_data.begin(), partition.unique_read_data.end());
+      partition.unique_read_data.erase(
+          std::unique(partition.unique_read_data.begin(), partition.unique_read_data.end()),
+          partition.unique_read_data.end());
+    }
+  }
+
+  void score_partitions(const SchedulerState &state) {
+    partition_costs.assign(partitions.size() * eligible_devices_buffer.size(), MAX_TIME);
+
+    for (std::size_t partition_index = 0; partition_index < partitions.size(); ++partition_index) {
+      const auto &partition = partitions[partition_index];
+      for (std::size_t device_index = 0; device_index < eligible_devices_buffer.size();
+           ++device_index) {
+        const auto device_id = eligible_devices_buffer[device_index];
+        timecount_t total_cost = 0;
+        for (const auto data_id : partition.unique_read_data) {
+          total_cost = saturating_add(total_cost, transfer_time_for_data(data_id, device_id, state));
+        }
+        partition_costs[partition_index * eligible_devices_buffer.size() + device_index] =
+            total_cost;
+      }
+    }
+  }
+
+  [[nodiscard]] timecount_t get_partition_cost(std::size_t partition_index,
+                                               std::size_t device_index) const {
+    return partition_costs[partition_index * eligible_devices_buffer.size() + device_index];
+  }
+
+  void prepare_assignment_order() {
+    assignment_partition_order.resize(partitions.size());
+    std::iota(assignment_partition_order.begin(), assignment_partition_order.end(), std::size_t{0});
+    std::sort(assignment_partition_order.begin(), assignment_partition_order.end(),
+              [&](std::size_t lhs, std::size_t rhs) {
+                const auto &lhs_partition = partitions[lhs];
+                const auto &rhs_partition = partitions[rhs];
+                if (lhs_partition.candidate_indices.size() != rhs_partition.candidate_indices.size()) {
+                  return lhs_partition.candidate_indices.size() >
+                         rhs_partition.candidate_indices.size();
+                }
+                if (lhs_partition.total_priority != rhs_partition.total_priority) {
+                  return lhs_partition.total_priority > rhs_partition.total_priority;
+                }
+                if (lhs_partition.min_task_id != rhs_partition.min_task_id) {
+                  return lhs_partition.min_task_id < rhs_partition.min_task_id;
+                }
+                return lhs_partition.label < rhs_partition.label;
+              });
+  }
+
+  [[nodiscard]] bool better_assignment_sequence(const std::vector<uint8_t> &lhs,
+                                                const std::vector<uint8_t> &rhs) const {
+    if (rhs.empty()) {
+      return true;
+    }
+    const auto common = std::min(lhs.size(), rhs.size());
+    for (std::size_t i = 0; i < common; ++i) {
+      const auto lhs_device = eligible_devices_buffer[static_cast<std::size_t>(lhs[i])];
+      const auto rhs_device = eligible_devices_buffer[static_cast<std::size_t>(rhs[i])];
+      if (lhs_device != rhs_device) {
+        return lhs_device < rhs_device;
+      }
+    }
+    return lhs.size() < rhs.size();
+  }
+
+  const AssignmentSolution &solve_assignment(uint64_t used_mask) {
+    const auto mask_index = static_cast<std::size_t>(used_mask);
+    if (assignment_memo_ready[mask_index]) {
+      return assignment_memo[mask_index];
+    }
+
+    auto &best = assignment_memo[mask_index];
+    assignment_memo_ready[mask_index] = 1;
+    best = AssignmentSolution{};
+
+    const auto position =
+        static_cast<std::size_t>(std::popcount(static_cast<unsigned long long>(used_mask)));
+    if (position == assignment_partition_order.size()) {
+      best.feasible = true;
+      best.total_cost = 0;
+      return best;
+    }
+
+    const auto partition_index = assignment_partition_order[position];
+    for (std::size_t device_index = 0; device_index < eligible_devices_buffer.size(); ++device_index) {
+      const auto bit = (uint64_t{1} << device_index);
+      if ((used_mask & bit) != 0) {
+        continue;
+      }
+
+      const auto direct_cost = get_partition_cost(partition_index, device_index);
+      if (direct_cost >= MAX_TIME) {
+        continue;
+      }
+
+      const auto &suffix = solve_assignment(used_mask | bit);
+      if (!suffix.feasible) {
+        continue;
+      }
+
+      AssignmentSolution candidate;
+      candidate.feasible = true;
+      candidate.total_cost = saturating_add(direct_cost, suffix.total_cost);
+      if (candidate.total_cost >= MAX_TIME) {
+        continue;
+      }
+      candidate.device_suffix = suffix.device_suffix;
+      candidate.device_suffix.insert(candidate.device_suffix.begin(),
+                                     static_cast<uint8_t>(device_index));
+
+      if (!best.feasible || candidate.total_cost < best.total_cost ||
+          (candidate.total_cost == best.total_cost &&
+           better_assignment_sequence(candidate.device_suffix, best.device_suffix))) {
+        best = std::move(candidate);
+      }
+    }
+
+    return best;
+  }
+
+  [[nodiscard]] bool assign_partition_devices(const SchedulerState &state) {
+    MONUnusedParameter(state);
+    score_partitions(state);
+    partition_devices.assign(partitions.size(), devid_t{-1});
+    if (partitions.empty()) {
+      return true;
+    }
+
+    T4F_INVARIANT(partitions.size() <= eligible_devices_buffer.size());
+    constexpr std::size_t mask_bits = std::numeric_limits<uint64_t>::digits;
+    if (eligible_devices_buffer.size() >= mask_bits) {
+      SPDLOG_WARN("METISMapper exact assignment requires fewer than {} GPU devices; got {}",
+                  mask_bits, eligible_devices_buffer.size());
+      return false;
+    }
+
+    prepare_assignment_order();
+    const auto state_count = static_cast<std::size_t>(uint64_t{1} << eligible_devices_buffer.size());
+    assignment_memo.assign(state_count, AssignmentSolution{});
+    assignment_memo_ready.assign(state_count, 0);
+
+    const auto &best = solve_assignment(0);
+    if (!best.feasible || best.device_suffix.size() != assignment_partition_order.size()) {
+      return false;
+    }
+
+    for (std::size_t position = 0; position < assignment_partition_order.size(); ++position) {
+      const auto partition_index = assignment_partition_order[position];
+      const auto device_index = static_cast<std::size_t>(best.device_suffix[position]);
+      partition_devices[partition_index] = eligible_devices_buffer[device_index];
+    }
+    return true;
+  }
+
+  void emit_partition_actions(const SchedulerState &state) {
+    std::vector<std::size_t> partition_order(partitions.size(), 0);
+    std::iota(partition_order.begin(), partition_order.end(), std::size_t{0});
+    std::sort(partition_order.begin(), partition_order.end(),
+              [&](std::size_t lhs, std::size_t rhs) {
+                if (partition_devices[lhs] != partition_devices[rhs]) {
+                  return partition_devices[lhs] < partition_devices[rhs];
+                }
+                return partitions[lhs].min_task_id < partitions[rhs].min_task_id;
+              });
+
+    for (const auto partition_index : partition_order) {
+      auto &partition = partitions[partition_index];
+      std::sort(partition.candidate_indices.begin(), partition.candidate_indices.end(),
+                [&](int32_t lhs, int32_t rhs) {
+                  const auto &lhs_candidate = candidate_records[static_cast<std::size_t>(lhs)];
+                  const auto &rhs_candidate = candidate_records[static_cast<std::size_t>(rhs)];
+                  if (lhs_candidate.priority != rhs_candidate.priority) {
+                    return lhs_candidate.priority > rhs_candidate.priority;
+                  }
+                  return lhs_candidate.task_id < rhs_candidate.task_id;
+                });
+
+      const auto device_id = partition_devices[partition_index];
+      for (const auto candidate_index : partition.candidate_indices) {
+        const auto &candidate = candidate_records[static_cast<std::size_t>(candidate_index)];
+        action_buffer.push_back(
+            Action{candidate.input_pos, device_id, candidate.priority, candidate.priority});
+        record_assignment(candidate.task_id, device_id, state);
+      }
+    }
+  }
+
+  ActionList &plan_tasks(std::span<const taskid_t> task_ids, const SchedulerState &state) {
+    action_buffer.clear();
+    action_buffer.reserve(task_ids.size());
+    if (task_ids.empty()) {
+      last_graph.clear();
+      clear_candidate_maps();
+      return action_buffer;
+    }
+
+    ensure_task_buffers_size(static_cast<std::size_t>(state.get_tasks().get_n_compute_tasks()));
+    if (should_reset_for_new_run(state)) {
+      reset_task_buffers();
+    }
+
+    prepare_candidates(task_ids, state);
+    build_metis_graph(state);
+    reset_batch_device_times(state);
+
+    std::vector<int32_t> fallback_candidate_indices;
+    fallback_candidate_indices.reserve(candidate_records.size());
+    for (std::size_t i = 0; i < candidate_records.size(); ++i) {
+      if (!candidate_records[i].gpu_eligible) {
+        fallback_candidate_indices.push_back(static_cast<int32_t>(i));
+      }
+    }
+
+    const auto nparts = static_cast<int32_t>(
+        std::min(eligible_devices_buffer.size(), vertex_to_candidate_index.size()));
+    const bool should_fallback_all =
+        eligible_devices_buffer.empty() || last_graph.num_vertices <= 1 ||
+        last_graph.num_edges() == 0 || nparts <= 1;
+    if (should_fallback_all) {
+      fallback_candidate_indices.clear();
+      fallback_candidate_indices.reserve(candidate_records.size());
+      for (std::size_t i = 0; i < candidate_records.size(); ++i) {
+        fallback_candidate_indices.push_back(static_cast<int32_t>(i));
+      }
+      emit_fallback_actions(fallback_candidate_indices, state);
+      return action_buffer;
+    }
+
+    partition_labels.assign(vertex_to_candidate_index.size(), 0);
+    const bool partitioned = metis.call_metis_partition(last_graph, nparts, partition_labels);
+    if (!partitioned) {
+      SPDLOG_WARN("METIS call failed, falling back to EFT-style mapping for this batch");
+      fallback_candidate_indices.clear();
+      fallback_candidate_indices.reserve(candidate_records.size());
+      for (std::size_t i = 0; i < candidate_records.size(); ++i) {
+        fallback_candidate_indices.push_back(static_cast<int32_t>(i));
+      }
+      emit_fallback_actions(fallback_candidate_indices, state);
+      return action_buffer;
+    }
+
+    build_partitions(state);
+    if (!assign_partition_devices(state)) {
+      SPDLOG_WARN(
+          "METIS partition-device assignment failed, falling back to EFT-style mapping for this batch");
+      fallback_candidate_indices.clear();
+      fallback_candidate_indices.reserve(candidate_records.size());
+      for (std::size_t i = 0; i < candidate_records.size(); ++i) {
+        fallback_candidate_indices.push_back(static_cast<int32_t>(i));
+      }
+      emit_fallback_actions(fallback_candidate_indices, state);
+      return action_buffer;
+    }
+
+    emit_partition_actions(state);
+    emit_fallback_actions(fallback_candidate_indices, state);
+    return action_buffer;
+  }
+
+public:
+  METISMapper() {
+#ifndef ENABLE_METIS
+    throw std::runtime_error("METISMapper requires ENABLE_METIS at build time");
+#endif
+  }
+
+  METISMapper(const METISMapper &other) = default;
+
+  METISMapper(std::size_t n_tasks, std::size_t n_devices) {
+#ifndef ENABLE_METIS
+    MONUnusedParameter(n_tasks);
+    MONUnusedParameter(n_devices);
+    throw std::runtime_error("METISMapper requires ENABLE_METIS at build time");
+#else
+    candidate_records.reserve(n_tasks);
+    touched_candidate_tasks.reserve(n_tasks);
+    touched_gpu_tasks.reserve(n_tasks);
+    vertex_to_candidate_index.reserve(n_tasks);
+    partition_labels.reserve(n_tasks);
+    partitions.reserve(std::min(n_tasks, n_devices));
+    eligible_devices_buffer.reserve(n_devices);
+    batch_device_available_time.reserve(n_devices);
+    assignment_partition_order.reserve(n_tasks);
+#endif
+  }
+
+  [[nodiscard]] const MetisGraph &get_last_graph() const {
+    return last_graph;
   }
 
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
@@ -4096,6 +4940,52 @@ private:
     return result;
   }
 
+  [[nodiscard]] int32_t normalized_extended_batch_emission_cap() const {
+    return std::max<int32_t>(1, extended_batch_emission_cap);
+  }
+
+  [[nodiscard]] bool task_missing_set_contains(const DeviceCandidateRecord &device_record,
+                                               dataid_t data_id) const {
+    for (std::size_t missing_offset = 0; missing_offset < device_record.missing_size;
+         ++missing_offset) {
+      if (missing_data_buffer[device_record.missing_begin + missing_offset] == data_id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  [[nodiscard]] bool append_matching_bucket_actions(const BlockAccum &best_block,
+                                                    int32_t missing_count, devid_t device_id) {
+    emit_task_indices_buffer.clear();
+    for (std::size_t task_index = 0; task_index < candidate_tasks.size(); ++task_index) {
+      const auto &task_rec = candidate_tasks[task_index];
+      const auto &device_record = device_candidate_records[task_index];
+      if (!task_rec.active || !device_record.compatible || device_record.missing_count != missing_count) {
+        continue;
+      }
+      if (task_missing_set_contains(device_record, best_block.data_id)) {
+        emit_task_indices_buffer.push_back(static_cast<int32_t>(task_index));
+      }
+    }
+
+    std::sort(emit_task_indices_buffer.begin(), emit_task_indices_buffer.end(),
+              [&](int32_t lhs, int32_t rhs) {
+                return better_task_index(lhs, rhs, candidate_tasks);
+              });
+
+    if (emit_task_indices_buffer.empty()) {
+      return false;
+    }
+
+    const auto cap = normalized_extended_batch_emission_cap();
+    const auto emit_count = std::min<std::size_t>(emit_task_indices_buffer.size(), cap);
+    for (std::size_t emit_index = 0; emit_index < emit_count; ++emit_index) {
+      append_action(emit_task_indices_buffer[emit_index], device_id);
+    }
+    return emit_count > 0;
+  }
+
   void log_device_decision(devid_t device_id, int32_t best_block_index, DecisionReason reason,
                            std::size_t active_candidates, const SchedulerState &state) const {
     if (!trace_decisions) {
@@ -4104,8 +4994,10 @@ private:
 
     if (best_block_index < 0) {
       SPDLOG_DEBUG("Time:{} DARTS device={} candidates={} block=none t=0 c0=0 s0=0 s1=0 r=0 "
-                   "s2=0 s3=0 proximity_compute=0 proximity_count=0 reason={} emitted={}",
-                   state.get_global_time(), device_id, active_candidates, decision_reason_name(reason),
+                   "s2=0 s3=0 proximity_compute=0 proximity_count=0 reason={} emitted_count={} "
+                   "emitted={}",
+                   state.get_global_time(), device_id, active_candidates,
+                   decision_reason_name(reason), trace_emitted_tasks_buffer.size(),
                    emitted_tasks_string());
       return;
     }
@@ -4116,10 +5008,11 @@ private:
     const auto weighted_count = 4 * block.s1_count + 2 * block.s2_count + block.s3_count;
     SPDLOG_DEBUG(
         "Time:{} DARTS device={} candidates={} block={} t={} c0={} s0={} s1={} r={} s2={} s3={} "
-        "proximity_compute={} proximity_count={} reason={} emitted={}",
+        "proximity_compute={} proximity_count={} reason={} emitted_count={} emitted={}",
         state.get_global_time(), device_id, active_candidates, block.data_id, block.transfer_time,
         block.c0_compute, block.s0_count, block.s1_count, block.r_compute, block.s2_count,
         block.s3_count, weighted_compute, weighted_count, decision_reason_name(reason),
+        trace_emitted_tasks_buffer.size(),
         emitted_tasks_string());
   }
 
@@ -4171,17 +5064,32 @@ private:
       }
 
       if (best_block.best_s1_task_index >= 0) {
-        append_action(best_block.best_s1_task_index, device_id);
+        if (extended_frontier_enabled && extended_batch_emission_enabled &&
+            append_matching_bucket_actions(best_block, 2, device_id)) {
+          return DecisionReason::S1;
+        } else {
+          append_action(best_block.best_s1_task_index, device_id);
+        }
         return DecisionReason::S1;
       }
 
       if (extended_frontier_enabled && best_block.best_s2_task_index >= 0) {
-        append_action(best_block.best_s2_task_index, device_id);
+        if (extended_batch_emission_enabled &&
+            append_matching_bucket_actions(best_block, 3, device_id)) {
+          return DecisionReason::EXTENDED_S2;
+        } else {
+          append_action(best_block.best_s2_task_index, device_id);
+        }
         return DecisionReason::EXTENDED_S2;
       }
 
       if (extended_frontier_enabled && best_block.best_s3_task_index >= 0) {
-        append_action(best_block.best_s3_task_index, device_id);
+        if (extended_batch_emission_enabled &&
+            append_matching_bucket_actions(best_block, 4, device_id)) {
+          return DecisionReason::EXTENDED_S3;
+        } else {
+          append_action(best_block.best_s3_task_index, device_id);
+        }
         return DecisionReason::EXTENDED_S3;
       }
     }
@@ -4218,7 +5126,9 @@ private:
 public:
   DeviceThresholdState thresholds;
   bool extended_frontier_enabled = false;
+  bool extended_batch_emission_enabled = false;
   bool trace_decisions = false;
+  int32_t extended_batch_emission_cap = 4;
 
   DARTSMapper() = default;
 
@@ -4235,6 +5145,14 @@ public:
     selected_devices_buffer.reserve(n_devices);
     emit_task_indices_buffer.reserve(n_tasks);
     trace_emitted_tasks_buffer.reserve(n_tasks);
+  }
+
+  [[nodiscard]] int32_t get_extended_batch_emission_cap() const {
+    return extended_batch_emission_cap;
+  }
+
+  void set_extended_batch_emission_cap(int32_t cap) {
+    extended_batch_emission_cap = std::max<int32_t>(1, cap);
   }
 
   [[nodiscard]] int32_t get_mapped_threshold() const {
