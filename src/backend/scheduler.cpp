@@ -11,6 +11,110 @@
 
 // Scheduler
 
+std::span<const dataid_t> Scheduler::select_eviction_victims(devid_t device_id, mem_t missing_memory,
+                                                             std::span<const dataid_t> used_ids) {
+  const auto &data = state.get_data();
+  const auto &lru_manager = state.get_data_manager().get_lru_manager();
+
+  if (eviction_policy == EvictionPolicy::LRU) {
+    LRUEvictionPolicy policy;
+    return policy.select_victims(lru_manager, device_id, missing_memory, used_ids);
+  }
+
+  LeastUsedMappedEvictionPolicy policy;
+  return policy.select_victims(state, data, lru_manager, device_id, missing_memory, used_ids,
+                               eviction_candidate_buckets, eviction_nonempty_buckets,
+                               eviction_victim_buffer);
+}
+
+std::span<const dataid_t> LeastUsedMappedEvictionPolicy::select_victims(
+    const SchedulerState &state, const Data &data, const LRU_manager &lru_manager,
+    devid_t device_id, mem_t missing_memory, std::span<const dataid_t> used_ids,
+    std::vector<DataIDList> &candidate_buckets, std::vector<taskid_t> &nonempty_buckets,
+    DataIDList &victim_buffer) const {
+  const auto *usage_info = state.get_task_data_device_usage_info();
+  T4F_INVARIANT(usage_info != nullptr);
+
+  for (const auto bucket_index : nonempty_buckets) {
+    T4F_INVARIANT(bucket_index >= 0);
+    const auto idx = static_cast<std::size_t>(bucket_index);
+    T4F_INVARIANT(idx < candidate_buckets.size());
+    candidate_buckets[idx].clear();
+  }
+  nonempty_buckets.clear();
+
+  const auto max_bucket =
+      static_cast<std::size_t>(std::max<taskid_t>(state.counts.n_mapped(device_id), 0));
+  if (candidate_buckets.size() < max_bucket + 1) {
+    candidate_buckets.resize(max_bucket + 1);
+  }
+
+  lru_manager.visitLRUCandidates(device_id, used_ids, [&](dataid_t data_id, mem_t) {
+    const auto mapped_user_count = usage_info->get_mapped_usage(data_id, device_id);
+    T4F_INVARIANT(mapped_user_count >= 0);
+    const auto bucket_index = static_cast<std::size_t>(mapped_user_count);
+    T4F_INVARIANT(bucket_index < candidate_buckets.size());
+    if (candidate_buckets[bucket_index].empty()) {
+      nonempty_buckets.push_back(mapped_user_count);
+    }
+    candidate_buckets[bucket_index].push_back(data_id);
+  });
+
+  victim_buffer.clear();
+
+  mem_t accumulated = 0;
+  for (std::size_t bucket_index = 0; bucket_index < candidate_buckets.size(); ++bucket_index) {
+    for (const auto data_id : candidate_buckets[bucket_index]) {
+      victim_buffer.push_back(data_id);
+      accumulated += data.get_size(data_id);
+      if (accumulated >= missing_memory) {
+        break;
+      }
+    }
+    if (accumulated >= missing_memory) {
+      break;
+    }
+  }
+
+  T4F_INVARIANT(accumulated >= missing_memory &&
+                "LeastUsedMappedEvictionPolicy: evictable memory is smaller than requested");
+  return victim_buffer;
+}
+
+timecount_t Scheduler::estimate_data_task_remaining_transfer_time(taskid_t data_task_id) const {
+  const auto &s = this->state;
+  const auto &task_runtime = s.task_runtime;
+  const auto &static_graph = s.get_tasks();
+  const auto &data_manager = s.get_data_manager();
+  const auto &communication_manager = s.get_communication_manager();
+  const auto &topology = s.get_topology();
+  const auto &data = s.get_data();
+  const auto current_time = s.global_time;
+
+  const auto destination_device_id = task_runtime.get_data_task_mapped_device(data_task_id);
+  const dataid_t data_id = static_graph.get_data_id(data_task_id);
+
+  if (data_manager.check_valid_launched(data_id, destination_device_id)) {
+    return 0;
+  }
+
+  timecount_t remaining_time = 0;
+  if (data_manager.try_get_movement_remaining_time(data_id, destination_device_id, current_time,
+                                                   remaining_time)) {
+    return remaining_time;
+  }
+
+  const auto launched_flags = data_manager.get_launched_location_flags(data_id);
+  const auto req =
+      communication_manager.get_best_source(topology, destination_device_id, launched_flags);
+  if (!req.found) {
+    return MAX_TIME;
+  }
+
+  return communication_manager.ideal_time_to_transfer(topology, data.get_size(data_id),
+                                                      req.source, destination_device_id);
+}
+
 size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
 
   auto &s = this->state;
@@ -198,6 +302,12 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
 
     auto candidates = collect_candidates();
     ActionList &actions = mapper.map_tasks(candidates, s);
+    if (actions.empty()) {
+      SPDLOG_WARN("Time:{} Mapper returned no actions for {} candidates; ending mapper round to "
+                  "avoid a no-progress loop",
+                  current_time, candidates.size());
+      break;
+    }
     apply_mapped_actions(candidates, actions);
   }
 
@@ -668,7 +778,8 @@ bool Scheduler::launch_data_tasks(EventManager &event_manager) {
   while (queues.has_active_data_launchable() &&
          scheduler_conditions.should_launch_data(s, queues)) {
     const auto active_idx = data_launchable.get_active_index();
-    taskid_t task_id = data_launchable.top();
+    const auto task = data_launchable.top();
+    taskid_t task_id = task.task_id;
     auto device_id = static_cast<devid_t>(active_idx);
 
     bool success = launch_data_task(task_id, device_id, event_manager);
@@ -821,7 +932,6 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
   auto &task_runtime = s.task_runtime;
   const auto &static_graph = s.get_tasks();
   const auto &data_manager = s.data_manager;
-  const auto &lru_manager = s.data_manager.get_lru_manager();
   auto &device_manager = s.get_device_manager();
   const auto &data = s.get_data();
   auto current_time = s.global_time;
@@ -850,7 +960,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
         const auto [requested, missing] = s.request_reserve_resources(compute_task_id, device_id);
         if (missing.mem) { // There is still memory to evict
           const auto unique_data = static_graph.get_unique(compute_task_id);
-          auto data_ids = lru_manager.getLRUids(device_id, missing.mem, unique_data);
+          auto data_ids = select_eviction_victims(device_id, missing.mem, unique_data);
           for (auto data_id : data_ids) {
 
             const bool inserted = eviction_planned_victim_keys.emplace(pack_eviction_key(data_id, device_id)).second;

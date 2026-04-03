@@ -29,6 +29,11 @@ void init_simulator_ext(nb::module_ &m) {
       .value("ERROR", ExecutionState::ERROR)
       .export_values();
 
+  nb::enum_<EvictionPolicy>(m, "EvictionPolicy", nb::is_arithmetic())
+      .value("LRU", EvictionPolicy::LRU)
+      .value("LEAST_USED_MAPPED", EvictionPolicy::LEAST_USED_MAPPED)
+      .export_values();
+
   nb::class_<SchedulerInput>(m, "SchedulerInput")
       .def(nb::init<Graph &, StaticTaskInfo &, Data &, Devices &, Topology &, TaskNoise &,
                     TransitionConditions &>(),
@@ -36,11 +41,18 @@ void init_simulator_ext(nb::module_ &m) {
            nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>(),
            nb::keep_alive<1, 8>())
       .def(nb::init<Graph &, StaticTaskInfo &, Data &, Devices &, Topology &, TaskNoise &,
-                    TransitionConditions &, int32_t>(),
-           nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(),
-           nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>(),
-           nb::keep_alive<1, 8>())
-      .def(nb::init<SchedulerInput &>(), nb::keep_alive<1, 2>());
+                    TransitionConditions &, int32_t, EvictionPolicy, bool>(),
+           "graph"_a, "tasks"_a, "data"_a, "devices"_a, "topology"_a, "task_noise"_a,
+           "conditions"_a, "top_k_candidates"_a = 1,
+           "eviction_policy"_a = EvictionPolicy::LRU,
+           "transfer_aware_data_launch_order"_a = false, nb::keep_alive<1, 2>(),
+           nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(),
+           nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>(), nb::keep_alive<1, 8>())
+      .def(nb::init<SchedulerInput &>(), nb::keep_alive<1, 2>())
+      .def_ro("top_k_candidates", &SchedulerInput::top_k_candidates)
+      .def_ro("eviction_policy", &SchedulerInput::eviction_policy)
+      .def_ro("transfer_aware_data_launch_order",
+              &SchedulerInput::transfer_aware_data_launch_order);
 
   nb::class_<Simulator>(m, "Simulator")
       .def_ro("initialized", &Simulator::initialized)

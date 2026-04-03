@@ -22,7 +22,9 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <set>
 #include <stack>
+#include <stdexcept>
 #include <type_traits>
 #include <tracy/Tracy.hpp>
 #include <unordered_map>
@@ -42,6 +44,88 @@ using MappableTaskQueue = ContainerQueue<taskid_t, DynamicTopKQueue>;
 using TaskQueue = ContainerQueue<taskid_t, std::priority_queue>;
 using DeviceQueue = ActiveQueueIterator<TaskQueue>;
 
+struct DataLaunchQueueEntry {
+  taskid_t task_id = 0;
+  priority_t parent_priority = 0;
+  timecount_t remaining_transfer_time = 0;
+  uint64_t seq = 0;
+  bool transfer_aware = false;
+};
+
+struct DataLaunchQueueCompare {
+  [[nodiscard]] bool operator()(const DataLaunchQueueEntry &lhs,
+                                const DataLaunchQueueEntry &rhs) const {
+    if (lhs.transfer_aware != rhs.transfer_aware) {
+      return lhs.transfer_aware < rhs.transfer_aware;
+    }
+
+    if (!lhs.transfer_aware) {
+      return lhs.seq < rhs.seq;
+    }
+
+    if (lhs.parent_priority != rhs.parent_priority) {
+      return lhs.parent_priority > rhs.parent_priority;
+    }
+    if (lhs.remaining_transfer_time != rhs.remaining_transfer_time) {
+      return lhs.remaining_transfer_time < rhs.remaining_transfer_time;
+    }
+    if (lhs.task_id != rhs.task_id) {
+      return lhs.task_id < rhs.task_id;
+    }
+    return lhs.seq < rhs.seq;
+  }
+};
+
+class DataLaunchTaskQueue {
+private:
+  using Container = std::multiset<DataLaunchQueueEntry, DataLaunchQueueCompare>;
+  Container entries;
+
+public:
+  using value_type = DataLaunchQueueEntry;
+  using element_type = value_type;
+  using value_compare = DataLaunchQueueCompare;
+
+  DataLaunchTaskQueue() = default;
+
+  void push(value_type value) {
+    entries.insert(std::move(value));
+  }
+
+  void push(value_type value, priority_t /*priority*/) {
+    entries.insert(std::move(value));
+  }
+
+  void push_random(value_type value) {
+    entries.insert(std::move(value));
+  }
+
+  [[nodiscard]] value_type top() const {
+    T4F_INVARIANT(!entries.empty() && "top() called on an empty DataLaunchTaskQueue");
+    return *entries.begin();
+  }
+
+  [[nodiscard]] const element_type &top_element() const {
+    T4F_INVARIANT(!entries.empty() && "top_element() called on an empty DataLaunchTaskQueue");
+    return *entries.begin();
+  }
+
+  void pop() {
+    T4F_INVARIANT(!entries.empty() && "pop() called on an empty DataLaunchTaskQueue");
+    entries.erase(entries.begin());
+  }
+
+  [[nodiscard]] bool empty() const noexcept {
+    return entries.empty();
+  }
+
+  [[nodiscard]] std::size_t size() const noexcept {
+    return entries.size();
+  }
+};
+
+using DataLaunchDeviceQueue = ActiveQueueIterator<DataLaunchTaskQueue>;
+
 using TaskIDTimeList = std::pair<TaskIDList, std::vector<timecount_t>>;
 
 class TransitionConditions;
@@ -57,6 +141,28 @@ enum class ExecutionState : int8_t {
   ERROR = 5,
 };
 constexpr std::size_t num_execution_states = 6;
+
+enum class EvictionPolicy : int8_t {
+  LRU = 0,
+  LEAST_USED_MAPPED = 1,
+};
+constexpr std::size_t num_eviction_policies = 2;
+
+inline std::string to_string(const EvictionPolicy &policy) {
+  switch (policy) {
+  case EvictionPolicy::LRU:
+    return "LRU";
+  case EvictionPolicy::LEAST_USED_MAPPED:
+    return "LEAST_USED_MAPPED";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+inline std::ostream &operator<<(std::ostream &os, const EvictionPolicy &policy) {
+  os << to_string(policy);
+  return os;
+}
 
 inline std::string to_string(const ExecutionState &state) {
   switch (state) {
@@ -93,7 +199,7 @@ protected:
   MappableTaskQueue mappable;
   DeviceQueue reservable;
   DeviceQueue launchable;
-  DeviceQueue data_launchable;
+  DataLaunchDeviceQueue data_launchable;
   DeviceQueue eviction_launchable;
 
   // static TaskType id_to_type(taskid_t id, const Tasks &tasks);
@@ -102,7 +208,7 @@ protected:
 
 public:
   SchedulerQueues() = default;
-  priority_t data_queue_count = 0;
+  uint64_t data_queue_seq = 0;
 
   SchedulerQueues(Devices &devices)
       : reservable(devices.size()), launchable(devices.size()), data_launchable(devices.size()),
@@ -133,12 +239,22 @@ public:
     launchable.push_priority_at(device, id, p);
   }
 
-  void push_launchable_data(taskid_t id, priority_t p, devid_t device) {
-    // TODO: change this to normal queue if needed keeping priority queue semantics for now
-    data_launchable.push_priority_at(device, id, data_queue_count++);
-    SPDLOG_DEBUG("Pushing launchable data task {} with priority {} on device {} data_queue_count "
-                 "{} current_top {}",
-                 id, p, device, data_queue_count - 1, data_launchable[device].top());
+  [[nodiscard]] uint64_t next_data_queue_seq() {
+    return data_queue_seq++;
+  }
+
+  void push_launchable_data(DataLaunchQueueEntry entry, devid_t device) {
+    const auto task_id = entry.task_id;
+    const auto parent_priority = entry.parent_priority;
+    const auto remaining_transfer_time = entry.remaining_transfer_time;
+    const auto seq = entry.seq;
+    const auto transfer_aware = entry.transfer_aware;
+    data_launchable.push_priority_at(device, std::move(entry), 0);
+    SPDLOG_DEBUG(
+        "Pushing launchable data task {} with parent priority {} on device {} seq {} "
+        "transfer_aware {} remaining_transfer_time {} current_top {}",
+        task_id, parent_priority, device, seq, transfer_aware, remaining_transfer_time,
+        data_launchable[device].top().task_id);
   }
 
   void push_launchable_eviction(taskid_t id, priority_t p, devid_t device) {
@@ -566,6 +682,76 @@ private:
   std::vector<int32_t> reserved_usage;
 };
 
+class TaskDataDeviceUsageInfo {
+public:
+  TaskDataDeviceUsageInfo() = default;
+
+  explicit TaskDataDeviceUsageInfo(std::size_t n_data, std::size_t n_devices)
+      : n_data(n_data), n_devices(n_devices), mapped_usage(n_data * n_devices, 0) {
+  }
+
+  void clear() {
+    std::fill(mapped_usage.begin(), mapped_usage.end(), int32_t{0});
+  }
+
+  [[nodiscard]] std::size_t data_size() const {
+    return n_data;
+  }
+
+  [[nodiscard]] std::size_t device_size() const {
+    return n_devices;
+  }
+
+  void on_mapped(std::span<const dataid_t> data_ids, devid_t device_id) {
+    for (const auto data_id : data_ids) {
+      mapped_at(data_id, device_id) += 1;
+    }
+  }
+
+  void on_reserved(std::span<const dataid_t> data_ids, devid_t device_id) {
+    for (const auto data_id : data_ids) {
+      auto &mapped = mapped_at(data_id, device_id);
+      if (mapped > 0) {
+        mapped -= 1;
+      }
+    }
+  }
+
+  void on_completed(std::span<const dataid_t> data_ids, devid_t device_id, bool was_mapped) {
+    if (!was_mapped) {
+      return;
+    }
+    on_reserved(data_ids, device_id);
+  }
+
+  [[nodiscard]] int32_t get_mapped_usage(dataid_t data_id, devid_t device_id) const {
+    return mapped_at(data_id, device_id);
+  }
+
+private:
+  [[nodiscard]] std::size_t offset(dataid_t data_id, devid_t device_id) const {
+    T4F_INVARIANT(data_id >= 0);
+    T4F_INVARIANT(device_id >= 0);
+    const auto data_idx = static_cast<std::size_t>(data_id);
+    const auto device_idx = static_cast<std::size_t>(device_id);
+    T4F_INVARIANT(data_idx < n_data);
+    T4F_INVARIANT(device_idx < n_devices);
+    return device_idx * n_data + data_idx;
+  }
+
+  [[nodiscard]] int32_t &mapped_at(dataid_t data_id, devid_t device_id) {
+    return mapped_usage[offset(data_id, device_id)];
+  }
+
+  [[nodiscard]] const int32_t &mapped_at(dataid_t data_id, devid_t device_id) const {
+    return mapped_usage[offset(data_id, device_id)];
+  }
+
+  std::size_t n_data = 0;
+  std::size_t n_devices = 0;
+  std::vector<int32_t> mapped_usage;
+};
+
 class TaskCostInfo {
 public:
   TaskCostInfo() = default;
@@ -628,12 +814,18 @@ struct SchedulerInput {
   std::reference_wrapper<TaskNoise> task_noise;
   std::reference_wrapper<TransitionConditions> conditions;
   int32_t top_k_candidates = 0;
+  EvictionPolicy eviction_policy = EvictionPolicy::LRU;
+  bool transfer_aware_data_launch_order = false;
 
   SchedulerInput(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
                  Topology &topology, TaskNoise &task_noise, TransitionConditions &conditions,
-                 int32_t top_k_candidates = 1)
+                 int32_t top_k_candidates = 1,
+                 EvictionPolicy eviction_policy = EvictionPolicy::LRU,
+                 bool transfer_aware_data_launch_order = false)
       : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
-        task_noise(task_noise), conditions(conditions), top_k_candidates(top_k_candidates) {
+        task_noise(task_noise), conditions(conditions), top_k_candidates(top_k_candidates),
+        eviction_policy(eviction_policy),
+        transfer_aware_data_launch_order(transfer_aware_data_launch_order) {
   }
 
   SchedulerInput(const SchedulerInput &other) = default;
@@ -644,7 +836,8 @@ struct SchedulerInput {
   SchedulerInput(SchedulerInput &&other) noexcept
       : graph(other.graph), tasks(other.tasks), data(other.data), devices(other.devices),
         topology(other.topology), task_noise(other.task_noise), conditions(other.conditions),
-        top_k_candidates(other.top_k_candidates) {
+        top_k_candidates(other.top_k_candidates), eviction_policy(other.eviction_policy),
+        transfer_aware_data_launch_order(other.transfer_aware_data_launch_order) {
   }
 
   SchedulerInput &operator=(SchedulerInput &&other) noexcept {
@@ -657,6 +850,8 @@ struct SchedulerInput {
       task_noise = other.task_noise;
       conditions = other.conditions;
       top_k_candidates = other.top_k_candidates;
+      eviction_policy = other.eviction_policy;
+      transfer_aware_data_launch_order = other.transfer_aware_data_launch_order;
     }
     return *this;
   }
@@ -671,6 +866,7 @@ protected:
   DataManager data_manager;
   std::optional<TaskDevicePhaseInfo> task_device_phase_info;
   std::optional<TaskDataUsageInfo> task_data_usage_info;
+  std::optional<TaskDataDeviceUsageInfo> task_data_device_usage_info;
   std::reference_wrapper<Graph> graph;
   std::reference_wrapper<StaticTaskInfo> tasks;
   std::reference_wrapper<Data> data;
@@ -760,7 +956,8 @@ public:
       : global_time(other.global_time), task_runtime(other.task_runtime),
         device_manager(other.device_manager), communication_manager(other.communication_manager),
         data_manager(other.data_manager), task_device_phase_info(other.task_device_phase_info),
-        task_data_usage_info(other.task_data_usage_info), graph(other.graph),
+        task_data_usage_info(other.task_data_usage_info),
+        task_data_device_usage_info(other.task_data_device_usage_info), graph(other.graph),
         tasks(other.tasks), data(other.data), devices(other.devices), topology(other.topology),
         task_noise(other.task_noise), counts(other.counts), costs(other.costs), flags(other.flags) {
     // ZoneScoped;
@@ -842,6 +1039,9 @@ public:
     if (task_data_usage_info.has_value()) {
       task_data_usage_info->clear();
     }
+    if (task_data_device_usage_info.has_value()) {
+      task_data_device_usage_info->clear();
+    }
   }
 
   void initialize_data_replicate(dataid_t data_id, devid_t device_id) {
@@ -908,6 +1108,9 @@ public:
     if (task_data_usage_info.has_value()) {
       task_data_usage_info->on_mapped(get_tasks().get_unique(compute_task_id));
     }
+    if (task_data_device_usage_info.has_value()) {
+      task_data_device_usage_info->on_mapped(get_tasks().get_unique(compute_task_id), device_id);
+    }
     DeviceType arch = get_devices().get_type(device_id);
     timecount_t time = get_tasks().get_mean_duration(compute_task_id, arch);
     costs.count_mapped(device_id, time);
@@ -920,6 +1123,9 @@ public:
     }
     if (task_data_usage_info.has_value()) {
       task_data_usage_info->on_reserved(get_tasks().get_unique(compute_task_id));
+    }
+    if (task_data_device_usage_info.has_value()) {
+      task_data_device_usage_info->on_reserved(get_tasks().get_unique(compute_task_id), device_id);
     }
     DeviceType arch = get_devices().get_type(device_id);
     timecount_t time = get_tasks().get_mean_duration(compute_task_id, arch);
@@ -935,11 +1141,17 @@ public:
   }
 
   void update_completed_cost(taskid_t compute_task_id, devid_t device_id) {
+    const bool was_mapped = task_device_phase_info.has_value() &&
+                            task_device_phase_info->has_mapped(compute_task_id, device_id);
     if (task_device_phase_info.has_value()) {
       task_device_phase_info->on_completed(compute_task_id, device_id);
     }
     if (task_data_usage_info.has_value()) {
       task_data_usage_info->on_completed(get_tasks().get_unique(compute_task_id));
+    }
+    if (task_data_device_usage_info.has_value()) {
+      task_data_device_usage_info->on_completed(get_tasks().get_unique(compute_task_id), device_id,
+                                                was_mapped);
     }
     DeviceType arch = get_devices().get_type(device_id);
     timecount_t time = get_tasks().get_mean_duration(compute_task_id, arch);
@@ -1145,6 +1357,32 @@ public:
     return &task_data_usage_info.value();
   }
 
+  void enable_task_data_device_usage_info() {
+    task_data_device_usage_info.emplace(get_data().size(), get_devices().size());
+  }
+
+  void disable_task_data_device_usage_info() {
+    task_data_device_usage_info.reset();
+  }
+
+  [[nodiscard]] bool has_task_data_device_usage_info() const {
+    return task_data_device_usage_info.has_value();
+  }
+
+  [[nodiscard]] TaskDataDeviceUsageInfo *get_task_data_device_usage_info() {
+    if (!task_data_device_usage_info.has_value()) {
+      return nullptr;
+    }
+    return &task_data_device_usage_info.value();
+  }
+
+  [[nodiscard]] const TaskDataDeviceUsageInfo *get_task_data_device_usage_info() const {
+    if (!task_data_device_usage_info.has_value()) {
+      return nullptr;
+    }
+    return &task_data_device_usage_info.value();
+  }
+
   [[nodiscard]] RuntimeTaskInfo &get_task_runtime() {
     return task_runtime;
   }
@@ -1297,24 +1535,106 @@ public:
   }
 };
 
+class DeviceThresholdState {
+public:
+  static constexpr int32_t disabled = -1;
+
+private:
+  int32_t mapped_threshold_ = 0;
+  int32_t reserved_threshold_ = disabled;
+
+  static void validate_thresholds(int32_t mapped_threshold, int32_t reserved_threshold) {
+    if (mapped_threshold >= 0 && reserved_threshold >= 0) {
+      throw std::invalid_argument(
+          "Device threshold settings are exclusive: enable either mapped or reserved checks, "
+          "not both");
+    }
+  }
+
+public:
+  DeviceThresholdState() = default;
+
+  DeviceThresholdState(int32_t mapped_threshold, int32_t reserved_threshold) {
+    set_thresholds(mapped_threshold, reserved_threshold);
+  }
+
+  void set_thresholds(int32_t mapped_threshold, int32_t reserved_threshold) {
+    validate_thresholds(mapped_threshold, reserved_threshold);
+    mapped_threshold_ = mapped_threshold;
+    reserved_threshold_ = reserved_threshold;
+  }
+
+  void use_mapped_threshold(int32_t mapped_threshold) {
+    set_thresholds(mapped_threshold, disabled);
+  }
+
+  void use_reserved_threshold(int32_t reserved_threshold) {
+    set_thresholds(disabled, reserved_threshold);
+  }
+
+  void disable_thresholds() {
+    set_thresholds(disabled, disabled);
+  }
+
+  [[nodiscard]] int32_t get_mapped_threshold() const {
+    return mapped_threshold_;
+  }
+
+  [[nodiscard]] int32_t get_reserved_threshold() const {
+    return reserved_threshold_;
+  }
+
+  void set_mapped_threshold(int32_t mapped_threshold) {
+    set_thresholds(mapped_threshold, reserved_threshold_);
+  }
+
+  void set_reserved_threshold(int32_t reserved_threshold) {
+    set_thresholds(mapped_threshold_, reserved_threshold);
+  }
+
+  [[nodiscard]] bool has_mapped_threshold() const {
+    return mapped_threshold_ >= 0;
+  }
+
+  [[nodiscard]] bool has_reserved_threshold() const {
+    return reserved_threshold_ >= 0;
+  }
+
+  [[nodiscard]] bool is_device_under_threshold(const SchedulerState &state,
+                                               devid_t device_id) const {
+    if (has_mapped_threshold()) {
+      return state.counts.n_mapped(device_id) <= mapped_threshold_;
+    }
+    if (has_reserved_threshold()) {
+      return state.counts.n_reserved(device_id) <= reserved_threshold_;
+    }
+    return false;
+  }
+};
+
 class DeviceThresholdTransitionConditions : public TransitionConditions {
 public:
-  int32_t mapped_threshold = 0;
-  int32_t reserved_threshold = 0;
+  DeviceThresholdState thresholds;
 
   DeviceThresholdTransitionConditions() = default;
 
   DeviceThresholdTransitionConditions(int32_t mapped_threshold_, int32_t reserved_threshold_)
-      : mapped_threshold(mapped_threshold_), reserved_threshold(reserved_threshold_) {
+      : thresholds(mapped_threshold_, reserved_threshold_) {
+  }
+
+  [[nodiscard]] int32_t get_mapped_threshold() const {
+    return thresholds.get_mapped_threshold();
+  }
+
+  [[nodiscard]] int32_t get_reserved_threshold() const {
+    return thresholds.get_reserved_threshold();
   }
 
   bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
     MONUnusedParameter(queues);
-    auto &counts = state.counts;
     const devid_t n_devices = state.get_devices().size();
     for (devid_t device_id = 1; device_id < n_devices; device_id++) {
-      if (counts.n_mapped(device_id) <= mapped_threshold ||
-          counts.n_reserved(device_id) <= reserved_threshold) {
+      if (thresholds.is_device_under_threshold(state, device_id)) {
         return true;
       }
     }
@@ -1343,18 +1663,27 @@ protected:
 
   SchedulerState state;
   SchedulerQueues queues;
+  EvictionPolicy eviction_policy = EvictionPolicy::LRU;
+  bool transfer_aware_data_launch_order = false;
   TaskDeviceList tasks_requesting_eviction;
   int64_t success_count = 0;
   int64_t eviction_count = 0;
   EvictionState eviction_state = EvictionState::NONE;
   ankerl::unordered_dense::map<uint64_t, uint8_t> eviction_invalidation_cache;
   ankerl::unordered_dense::set<uint64_t> eviction_planned_victim_keys;
+  DataIDList eviction_victim_buffer;
+  std::vector<DataIDList> eviction_candidate_buckets;
+  std::vector<taskid_t> eviction_nonempty_buckets;
 
   void enqueue_data_tasks(taskid_t task_id);
   [[nodiscard]] EvictionInvalidationInfo
   get_eviction_invalidation_info(const StaticTaskInfo &static_graph,
                                  const RuntimeTaskInfo &task_runtime, dataid_t data_id,
                                  devid_t device_id);
+  [[nodiscard]] std::span<const dataid_t>
+  select_eviction_victims(devid_t device_id, mem_t missing_memory,
+                          std::span<const dataid_t> used_ids);
+  [[nodiscard]] timecount_t estimate_data_task_remaining_transfer_time(taskid_t data_task_id) const;
   void clear_eviction_invalidation_cache() {
     eviction_invalidation_cache.clear();
   }
@@ -1370,13 +1699,21 @@ public:
   bool initialized = false;
 
   Scheduler(SchedulerInput &input)
-      : state(input), queues(input.devices), conditions(input.conditions) {
+      : state(input), queues(input.devices), conditions(input.conditions),
+        eviction_policy(input.eviction_policy),
+        transfer_aware_data_launch_order(input.transfer_aware_data_launch_order) {
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     candidates_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
     eviction_invalidation_cache.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
     eviction_planned_victim_keys.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
+    eviction_victim_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
+    eviction_candidate_buckets.reserve(INITIAL_TASK_BUFFER_SIZE);
+    eviction_nonempty_buckets.reserve(INITIAL_TASK_BUFFER_SIZE);
+    if (eviction_policy == EvictionPolicy::LEAST_USED_MAPPED) {
+      state.enable_task_data_device_usage_info();
+    }
     if (input.top_k_candidates > 0) {
       queues.mappable.set_k(static_cast<int>(input.top_k_candidates));
     }
@@ -1524,15 +1861,20 @@ public:
   void push_launchable_data(taskid_t data_task_id) {
     const priority_t p = state.task_runtime.get_data_task_launch_priority(data_task_id);
     const devid_t device = state.task_runtime.get_data_task_mapped_device(data_task_id);
-
-    queues.push_launchable_data(data_task_id, p, device);
+    const auto remaining_transfer_time = estimate_data_task_remaining_transfer_time(data_task_id);
+    DataLaunchQueueEntry entry{
+        .task_id = data_task_id,
+        .parent_priority = p,
+        .remaining_transfer_time = remaining_transfer_time,
+        .seq = queues.next_data_queue_seq(),
+        .transfer_aware = transfer_aware_data_launch_order,
+    };
+    queues.push_launchable_data(entry, device);
   }
 
   void push_launchable_data(const std::span<const taskid_t> data_task_ids) {
     for (auto data_task_id : data_task_ids) {
-      const priority_t p = state.task_runtime.get_data_task_launch_priority(data_task_id);
-      const devid_t device = state.task_runtime.get_data_task_mapped_device(data_task_id);
-      queues.push_launchable_data(data_task_id, p, device);
+      push_launchable_data(data_task_id);
     }
   }
 
@@ -1580,6 +1922,24 @@ public:
 
   friend class SchedulerState;
   friend class SchedulerQueues;
+};
+
+class LRUEvictionPolicy {
+public:
+  [[nodiscard]] std::span<const dataid_t>
+  select_victims(const LRU_manager &lru_manager, devid_t device_id, mem_t missing_memory,
+                 std::span<const dataid_t> used_ids) const {
+    return lru_manager.getLRUids(device_id, static_cast<std::size_t>(missing_memory), used_ids);
+  }
+};
+
+class LeastUsedMappedEvictionPolicy {
+public:
+  [[nodiscard]] std::span<const dataid_t>
+  select_victims(const SchedulerState &state, const Data &data, const LRU_manager &lru_manager,
+                 devid_t device_id, mem_t missing_memory, std::span<const dataid_t> used_ids,
+                 std::vector<DataIDList> &candidate_buckets,
+                 std::vector<taskid_t> &nonempty_buckets, DataIDList &victim_buffer) const;
 };
 
 class Mapper {
@@ -1858,7 +2218,7 @@ public:
     return max_dependency_finish_time[compute_task_id];
   }
 
-  DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
+  virtual DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
     fill_device_targets(task_id, state);
     T4F_INVARIANT(!device_buffer.empty());
     const timecount_t dep_time = get_dependency_finish_time(task_id, state);
@@ -1902,6 +2262,127 @@ public:
     record_finish_time(compute_task_id, min_time, state);
     auto mp = state.get_mapping_priority(compute_task_id);
     return Action(0, best_device, mp, mp);
+  }
+};
+
+class MemoryAwareEFTMapper : public EFTMapper {
+
+protected:
+  mutable DataIDList sorted_unique_buf_;
+
+  timecount_t estimate_eviction_cost(devid_t device_id, mem_t bytes_to_evict,
+                                     std::span<const dataid_t> protected_ids,
+                                     const SchedulerState &state) const {
+    if (bytes_to_evict <= 0) {
+      return 0;
+    }
+    const auto &lru = state.get_data_manager().get_lru_manager();
+    const auto &comm = state.get_communication_manager();
+    const auto &topo = state.get_topology();
+    const devid_t host = 0;
+
+    timecount_t cost = 0;
+    mem_t accumulated = 0;
+
+    lru.visitLRUCandidates(device_id, protected_ids,
+                           [&](dataid_t victim_id, mem_t victim_bytes) {
+                             if (accumulated >= bytes_to_evict) {
+                               return;
+                             }
+                             accumulated += victim_bytes;
+                             auto flags =
+                                 state.get_data_manager().get_mapped_location_flags(victim_id);
+                             if (__builtin_popcount(flags) <= 1) {
+                               // Only copy — must write back to host
+                               cost +=
+                                   comm.ideal_time_to_transfer(topo, victim_bytes, device_id, host);
+                             }
+                             // else: free invalidation
+                           });
+
+    if (accumulated < bytes_to_evict) {
+      return MAX_TIME; // infeasible: not enough evictable data
+    }
+    return cost;
+  }
+
+public:
+  double alpha = 1.0; // weight for eviction cost term (public for Python exposure)
+
+  MemoryAwareEFTMapper() = default;
+  MemoryAwareEFTMapper(const MemoryAwareEFTMapper &) = default;
+
+  MemoryAwareEFTMapper(std::size_t n_tasks, std::size_t n_devices, double alpha_val = 1.0)
+      : EFTMapper(n_tasks, n_devices), alpha(alpha_val) {}
+
+  DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) override {
+    fill_device_targets(task_id, state);
+    T4F_INVARIANT(!device_buffer.empty());
+    const timecount_t dep_time = get_dependency_finish_time(task_id, state);
+    const auto &tasks = state.get_tasks();
+    const auto &dm = state.get_device_manager();
+
+    // Build sorted unique data IDs for LRU binary_search exclusion
+    auto unique = tasks.get_unique(task_id);
+    sorted_unique_buf_.assign(unique.begin(), unique.end());
+    std::sort(sorted_unique_buf_.begin(), sorted_unique_buf_.end());
+
+    auto min_score = MAX_TIME;
+    auto best_device = device_buffer[0];
+
+    for (auto dev : device_buffer) {
+      const timecount_t dev_avail = get_device_available_time(dev, state);
+      const timecount_t start_t = std::max(dev_avail, dep_time);
+      const timecount_t ft = get_finish_time(task_id, dev, start_t, state);
+
+      // Estimate memory overflow on this device using RESERVED state,
+      // which matches what the LRU tracks (physically resident data)
+      // and what the actual eviction trigger at reserve time will compute.
+      const DeviceType arch = state.get_devices().get_type(dev);
+      const Resources &res = tasks.get_compute_task_resources(task_id, arch);
+      mem_t non_local = state.get_data_manager().non_local_size_reserved(
+          state.get_data(), unique, dev);
+      mem_t task_mem = res.mem + non_local;
+      mem_t overflow = dm.overflow_mem<TaskState::RESERVED>(dev, task_mem);
+
+      timecount_t evict_cost = 0;
+      if (overflow > 0) {
+        evict_cost = estimate_eviction_cost(dev, overflow, sorted_unique_buf_, state);
+        if (evict_cost >= MAX_TIME) {
+          SPDLOG_DEBUG("Task {} on device {}: INFEASIBLE (cannot evict enough memory)", task_id,
+                       dev);
+          continue; // skip infeasible device
+        }
+      }
+
+      timecount_t score =
+          ft + static_cast<timecount_t>(alpha * static_cast<double>(evict_cost));
+      SPDLOG_DEBUG("Task {} on device {}: ft={}, evict_cost={}, score={}, overflow={}", task_id,
+                   dev, ft, evict_cost, score, overflow);
+
+      if (score < min_score) {
+        min_score = score;
+        best_device = dev;
+      }
+    }
+
+    // Fallback: if all devices are infeasible, pick least-loaded and let reactive eviction handle it
+    if (min_score >= MAX_TIME) {
+      SPDLOG_WARN("Task {}: all devices infeasible for memory, falling back to least-loaded",
+                  task_id);
+      mem_t min_mem = std::numeric_limits<mem_t>::max();
+      for (auto dev : device_buffer) {
+        mem_t usage = dm.get_mem<TaskState::MAPPED>(dev);
+        if (usage < min_mem) {
+          min_mem = usage;
+          best_device = dev;
+        }
+      }
+      const timecount_t dev_avail = get_device_available_time(best_device, state);
+      min_score = get_finish_time(task_id, best_device, std::max(dev_avail, dep_time), state);
+    }
+
+    return {best_device, min_score};
   }
 };
 
@@ -2472,6 +2953,475 @@ public:
     auto &actions = plan_tasks(std::span<const taskid_t>(&task_id, 1), state);
     T4F_INVARIANT(actions.size() == 1);
     return actions.front();
+  }
+
+  ActionList &map_tasks(std::span<const taskid_t> task_ids, const SchedulerState &state) override {
+    return plan_tasks(task_ids, state);
+  }
+};
+
+class DARTSMapper : public Mapper {
+private:
+  struct CandidateTask {
+    taskid_t task_id = -1;
+    std::size_t input_pos = 0;
+    priority_t priority = 0;
+    devicemask_t supported_device_mask = 0;
+    bool active = true;
+  };
+
+  struct BlockAccum {
+    bool transfer_feasible = false;
+    dataid_t data_id = -1;
+    timecount_t transfer_time = MAX_TIME;
+    timecount_t c0_compute = 0;
+    timecount_t r_compute = 0;
+    int32_t s0_count = 0;
+    int32_t s1_count = 0;
+    int32_t best_s0_task = -1;
+    int32_t best_s1_task = -1;
+  };
+
+  std::vector<CandidateTask> candidate_tasks;
+  std::vector<int32_t> missing_count_buffer;
+  std::vector<dataid_t> first_missing_data_buffer;
+  std::vector<dataid_t> second_missing_data_buffer;
+  std::vector<BlockAccum> frontier_blocks;
+  std::vector<int32_t> frontier_slot_by_data;
+  DataIDList touched_frontier_data;
+  std::vector<devid_t> selected_devices_buffer;
+  std::vector<int32_t> s0_emit_buffer;
+
+  [[nodiscard]] static bool device_in_mask(devicemask_t device_mask, devid_t device_id) {
+    using UMask = std::make_unsigned_t<devicemask_t>;
+    constexpr std::size_t mask_bits = std::numeric_limits<UMask>::digits;
+    if (device_id < 0 || static_cast<std::size_t>(device_id) >= mask_bits) {
+      return false;
+    }
+    const auto mask = static_cast<UMask>(device_mask);
+    const auto bit = static_cast<UMask>(UMask{1} << static_cast<std::size_t>(device_id));
+    return (mask & bit) != 0;
+  }
+
+  void ensure_scratch_sizes(std::size_t n_tasks, std::size_t n_data) {
+    if (candidate_tasks.size() < n_tasks) {
+      candidate_tasks.resize(n_tasks);
+    }
+    if (missing_count_buffer.size() < n_tasks) {
+      missing_count_buffer.resize(n_tasks, 0);
+      first_missing_data_buffer.resize(n_tasks, dataid_t{-1});
+      second_missing_data_buffer.resize(n_tasks, dataid_t{-1});
+    }
+    if (frontier_slot_by_data.size() < n_data) {
+      frontier_slot_by_data.resize(n_data, -1);
+    }
+  }
+
+  [[nodiscard]] bool better_task_choice(const CandidateTask &lhs, const CandidateTask &rhs) const {
+    if (lhs.priority != rhs.priority) {
+      return lhs.priority > rhs.priority;
+    }
+    return lhs.task_id < rhs.task_id;
+  }
+
+  [[nodiscard]] bool better_task_index(int32_t lhs_index, int32_t rhs_index,
+                                       std::span<const CandidateTask> task_records) const {
+    if (rhs_index < 0) {
+      return lhs_index >= 0;
+    }
+    if (lhs_index < 0) {
+      return false;
+    }
+    return better_task_choice(task_records[static_cast<std::size_t>(lhs_index)],
+                              task_records[static_cast<std::size_t>(rhs_index)]);
+  }
+
+  [[nodiscard]] bool better_priority(priority_t lhs, priority_t rhs) const {
+    if (lhs != rhs) {
+      return lhs > rhs;
+    }
+    return false;
+  }
+
+  [[nodiscard]] bool task_supports_device(const CandidateTask &task_rec, devid_t device_id) const {
+    return device_in_mask(task_rec.supported_device_mask, device_id);
+  }
+
+  [[nodiscard]] bool try_get_transfer_time(dataid_t data_id, devid_t device_id,
+                                           const SchedulerState &state,
+                                           timecount_t &transfer_time) const {
+    const auto &data_manager = state.get_data_manager();
+    if (data_manager.check_valid_mapped(data_id, device_id)) {
+      transfer_time = 0;
+      return true;
+    }
+
+    const auto &communication_manager = state.get_communication_manager();
+    const auto &topology = state.get_topology();
+    const auto flags = data_manager.get_mapped_location_flags(data_id);
+    const auto req = communication_manager.get_best_source(topology, device_id, flags);
+    if (!req.found) {
+      transfer_time = MAX_TIME;
+      return false;
+    }
+
+    transfer_time = communication_manager.ideal_time_to_transfer(
+        topology, state.get_data().get_size(data_id), req.source, device_id);
+    return true;
+  }
+
+  [[nodiscard]] timecount_t duration_for_device(taskid_t task_id, devid_t device_id,
+                                                const SchedulerState &state) const {
+    const auto arch = state.get_devices().get_type(device_id);
+    return state.get_tasks().get_mean_duration(task_id, arch);
+  }
+
+  [[nodiscard]] timecount_t duration_for_tiebreak(taskid_t task_id, devid_t device_id,
+                                                  const SchedulerState &state) const {
+    const auto &tasks = state.get_tasks();
+    const auto preferred_arch = state.get_devices().get_type(device_id);
+    if (tasks.is_architecture_supported(task_id, preferred_arch)) {
+      return tasks.get_mean_duration(task_id, preferred_arch);
+    }
+    if (tasks.is_architecture_supported(task_id, DeviceType::GPU)) {
+      return tasks.get_mean_duration(task_id, DeviceType::GPU);
+    }
+    T4F_INVARIANT(tasks.is_architecture_supported(task_id, DeviceType::CPU));
+    return tasks.get_mean_duration(task_id, DeviceType::CPU);
+  }
+
+  [[nodiscard]] priority_t block_priority(const BlockAccum &block) const {
+    if (block.best_s0_task >= 0) {
+      return candidate_tasks[static_cast<std::size_t>(block.best_s0_task)].priority;
+    }
+    if (block.best_s1_task >= 0) {
+      return candidate_tasks[static_cast<std::size_t>(block.best_s1_task)].priority;
+    }
+    return std::numeric_limits<priority_t>::min();
+  }
+
+  [[nodiscard]] bool block_is_valid(const BlockAccum &block) const {
+    return block.transfer_feasible && (block.s0_count > 0 || block.s1_count > 0);
+  }
+
+  void reset_frontier() {
+    for (const auto data_id : touched_frontier_data) {
+      frontier_slot_by_data[static_cast<std::size_t>(data_id)] = -1;
+    }
+    touched_frontier_data.clear();
+    frontier_blocks.clear();
+  }
+
+  BlockAccum &get_or_create_frontier_block(dataid_t data_id, devid_t device_id,
+                                           const SchedulerState &state) {
+    const auto data_idx = static_cast<std::size_t>(data_id);
+    auto &slot = frontier_slot_by_data[data_idx];
+    if (slot >= 0) {
+      return frontier_blocks[static_cast<std::size_t>(slot)];
+    }
+
+    slot = static_cast<int32_t>(frontier_blocks.size());
+    touched_frontier_data.push_back(data_id);
+    frontier_blocks.push_back(BlockAccum{});
+    auto &block = frontier_blocks.back();
+    block.data_id = data_id;
+    block.transfer_feasible = try_get_transfer_time(data_id, device_id, state, block.transfer_time);
+    return block;
+  }
+
+  [[nodiscard]] bool better_block(const BlockAccum &lhs, const BlockAccum &rhs) const {
+    const bool lhs_valid = block_is_valid(lhs);
+    const bool rhs_valid = block_is_valid(rhs);
+    if (!rhs_valid) {
+      return lhs_valid;
+    }
+    if (!lhs_valid) {
+      return false;
+    }
+
+    const bool lhs_has_c0 = lhs.c0_compute > 0;
+    const bool rhs_has_c0 = rhs.c0_compute > 0;
+    if (lhs_has_c0 != rhs_has_c0) {
+      return lhs_has_c0;
+    }
+
+    if (lhs_has_c0) {
+      const __int128 lhs_ratio =
+          static_cast<__int128>(lhs.transfer_time) * static_cast<__int128>(rhs.c0_compute);
+      const __int128 rhs_ratio =
+          static_cast<__int128>(rhs.transfer_time) * static_cast<__int128>(lhs.c0_compute);
+      if (lhs_ratio != rhs_ratio) {
+        return lhs_ratio < rhs_ratio;
+      }
+      if (lhs.s0_count != rhs.s0_count) {
+        return lhs.s0_count > rhs.s0_count;
+      }
+      const auto lhs_priority = block_priority(lhs);
+      const auto rhs_priority = block_priority(rhs);
+      if (lhs_priority != rhs_priority) {
+        return better_priority(lhs_priority, rhs_priority);
+      }
+      if (lhs.s1_count != rhs.s1_count) {
+        return lhs.s1_count > rhs.s1_count;
+      }
+      if (lhs.r_compute != rhs.r_compute) {
+        return lhs.r_compute > rhs.r_compute;
+      }
+      return lhs.data_id < rhs.data_id;
+    }
+
+    if (lhs.s1_count != rhs.s1_count) {
+      return lhs.s1_count > rhs.s1_count;
+    }
+    const auto lhs_priority = block_priority(lhs);
+    const auto rhs_priority = block_priority(rhs);
+    if (lhs_priority != rhs_priority) {
+      return better_priority(lhs_priority, rhs_priority);
+    }
+    if (lhs.r_compute != rhs.r_compute) {
+      return lhs.r_compute > rhs.r_compute;
+    }
+    return lhs.data_id < rhs.data_id;
+  }
+
+  void append_action(int32_t task_index, devid_t device_id) {
+    auto &task_rec = candidate_tasks[static_cast<std::size_t>(task_index)];
+    if (!task_rec.active) {
+      return;
+    }
+    task_rec.active = false;
+    action_buffer.push_back(Action{task_rec.input_pos, device_id, task_rec.priority,
+                                   task_rec.priority});
+  }
+
+  [[nodiscard]] int32_t fallback_task_for_device(devid_t device_id) const {
+    int32_t best_task_index = -1;
+    for (std::size_t task_index = 0; task_index < candidate_tasks.size(); ++task_index) {
+      const auto &task_rec = candidate_tasks[task_index];
+      if (!task_rec.active || !task_supports_device(task_rec, device_id)) {
+        continue;
+      }
+      if (better_task_index(static_cast<int32_t>(task_index), best_task_index, candidate_tasks)) {
+        best_task_index = static_cast<int32_t>(task_index);
+      }
+    }
+    return best_task_index;
+  }
+
+  [[nodiscard]] Action fallback_action_for_task(taskid_t task_id, const SchedulerState &state) {
+    fill_device_targets(task_id, state);
+    T4F_INVARIANT(!device_buffer.empty());
+    const auto mp = state.get_mapping_priority(task_id);
+    return Action{0, device_buffer.front(), mp, mp};
+  }
+
+  ActionList &plan_tasks(std::span<const taskid_t> task_ids, const SchedulerState &state) {
+    const auto &tasks = state.get_tasks();
+    const auto &data_manager = state.get_data_manager();
+    const auto n_devices = state.get_devices().size();
+    action_buffer.clear();
+    action_buffer.reserve(task_ids.size());
+    if (task_ids.empty()) {
+      return action_buffer;
+    }
+
+    ensure_scratch_sizes(task_ids.size(), state.get_data().size());
+    candidate_tasks.resize(task_ids.size());
+
+    for (std::size_t input_pos = 0; input_pos < task_ids.size(); ++input_pos) {
+      const auto task_id = task_ids[input_pos];
+      auto &rec = candidate_tasks[input_pos];
+      rec.task_id = task_id;
+      rec.input_pos = input_pos;
+      rec.priority = state.get_mapping_priority(task_id);
+      rec.supported_device_mask = tasks.get_supported_devices_mask(task_id);
+      rec.active = true;
+      missing_count_buffer[input_pos] = 0;
+      first_missing_data_buffer[input_pos] = dataid_t{-1};
+      second_missing_data_buffer[input_pos] = dataid_t{-1};
+    }
+
+    selected_devices_buffer.clear();
+    selected_devices_buffer.reserve(n_devices);
+    for (devid_t device_id = 1; device_id < n_devices; ++device_id) {
+      if (thresholds.is_device_under_threshold(state, device_id)) {
+        selected_devices_buffer.push_back(device_id);
+      }
+    }
+
+    for (const auto device_id : selected_devices_buffer) {
+      reset_frontier();
+      int32_t best_fallback_task = -1;
+
+      for (std::size_t task_index = 0; task_index < candidate_tasks.size(); ++task_index) {
+        const auto &task_rec = candidate_tasks[task_index];
+        if (!task_rec.active || !task_supports_device(task_rec, device_id)) {
+          continue;
+        }
+
+        if (better_task_index(static_cast<int32_t>(task_index), best_fallback_task,
+                              candidate_tasks)) {
+          best_fallback_task = static_cast<int32_t>(task_index);
+        }
+
+        int32_t missing_count = 0;
+        dataid_t first_missing = -1;
+        dataid_t second_missing = -1;
+        for (const auto data_id : tasks.get_read(task_rec.task_id)) {
+          if (data_manager.check_valid_mapped(data_id, device_id)) {
+            continue;
+          }
+          if (missing_count == 0) {
+            first_missing = data_id;
+          } else if (missing_count == 1) {
+            second_missing = data_id;
+          }
+          ++missing_count;
+        }
+
+        missing_count_buffer[task_index] = missing_count;
+        first_missing_data_buffer[task_index] = first_missing;
+        second_missing_data_buffer[task_index] = second_missing;
+
+        const auto duration = duration_for_device(task_rec.task_id, device_id, state);
+        if (missing_count == 1 && first_missing >= 0) {
+          auto &block = get_or_create_frontier_block(first_missing, device_id, state);
+          block.s0_count += 1;
+          block.c0_compute += duration;
+          if (better_task_index(static_cast<int32_t>(task_index), block.best_s0_task,
+                                candidate_tasks)) {
+            block.best_s0_task = static_cast<int32_t>(task_index);
+          }
+        } else if (missing_count == 2) {
+          auto &first_block = get_or_create_frontier_block(first_missing, device_id, state);
+          first_block.s1_count += 1;
+          if (better_task_index(static_cast<int32_t>(task_index), first_block.best_s1_task,
+                                candidate_tasks)) {
+            first_block.best_s1_task = static_cast<int32_t>(task_index);
+          }
+
+          auto &second_block = get_or_create_frontier_block(second_missing, device_id, state);
+          second_block.s1_count += 1;
+          if (better_task_index(static_cast<int32_t>(task_index), second_block.best_s1_task,
+                                candidate_tasks)) {
+            second_block.best_s1_task = static_cast<int32_t>(task_index);
+          }
+        }
+      }
+
+      if (!frontier_blocks.empty()) {
+        for (std::size_t task_index = 0; task_index < candidate_tasks.size(); ++task_index) {
+          const auto &task_rec = candidate_tasks[task_index];
+          if (!task_rec.active) {
+            continue;
+          }
+
+          const auto tiebreak_duration = duration_for_tiebreak(task_rec.task_id, device_id, state);
+          for (const auto data_id : tasks.get_read(task_rec.task_id)) {
+            const auto slot = frontier_slot_by_data[static_cast<std::size_t>(data_id)];
+            if (slot >= 0) {
+              frontier_blocks[static_cast<std::size_t>(slot)].r_compute += tiebreak_duration;
+            }
+          }
+        }
+      }
+
+      int32_t best_block_index = -1;
+      for (std::size_t block_index = 0; block_index < frontier_blocks.size(); ++block_index) {
+        if (better_block(frontier_blocks[block_index],
+                         best_block_index >= 0
+                             ? frontier_blocks[static_cast<std::size_t>(best_block_index)]
+                             : BlockAccum{})) {
+          best_block_index = static_cast<int32_t>(block_index);
+        }
+      }
+
+      if (best_block_index >= 0) {
+        const auto &best_block = frontier_blocks[static_cast<std::size_t>(best_block_index)];
+
+        if (best_block.s0_count > 0) {
+          s0_emit_buffer.clear();
+          for (std::size_t task_index = 0; task_index < candidate_tasks.size(); ++task_index) {
+            const auto &task_rec = candidate_tasks[task_index];
+            if (!task_rec.active || !task_supports_device(task_rec, device_id)) {
+              continue;
+            }
+            if (missing_count_buffer[task_index] == 1 &&
+                first_missing_data_buffer[task_index] == best_block.data_id) {
+              s0_emit_buffer.push_back(static_cast<int32_t>(task_index));
+            }
+          }
+
+          std::sort(s0_emit_buffer.begin(), s0_emit_buffer.end(), [&](int32_t lhs, int32_t rhs) {
+            return better_task_index(lhs, rhs, candidate_tasks);
+          });
+          for (const auto task_index : s0_emit_buffer) {
+            append_action(task_index, device_id);
+          }
+          continue;
+        }
+
+        if (best_block.s1_count > 0 && best_block.best_s1_task >= 0) {
+          append_action(best_block.best_s1_task, device_id);
+          continue;
+        }
+      }
+
+      const auto best_task_index = best_fallback_task;
+      if (best_task_index >= 0) {
+        append_action(best_task_index, device_id);
+      }
+    }
+
+    reset_frontier();
+    return action_buffer;
+  }
+
+public:
+  DeviceThresholdState thresholds;
+
+  DARTSMapper() = default;
+
+  DARTSMapper(const DARTSMapper &other) = default;
+
+  DARTSMapper(std::size_t n_tasks, std::size_t n_devices) {
+    candidate_tasks.reserve(n_tasks);
+    missing_count_buffer.reserve(n_tasks);
+    first_missing_data_buffer.reserve(n_tasks);
+    second_missing_data_buffer.reserve(n_tasks);
+    frontier_blocks.reserve(n_tasks);
+    frontier_slot_by_data.reserve(n_devices);
+    touched_frontier_data.reserve(n_tasks);
+    selected_devices_buffer.reserve(n_devices);
+    s0_emit_buffer.reserve(n_tasks);
+  }
+
+  [[nodiscard]] int32_t get_mapped_threshold() const {
+    return thresholds.get_mapped_threshold();
+  }
+
+  [[nodiscard]] int32_t get_reserved_threshold() const {
+    return thresholds.get_reserved_threshold();
+  }
+
+  void set_mapped_threshold(int32_t mapped_threshold) {
+    thresholds.set_mapped_threshold(mapped_threshold);
+  }
+
+  void set_reserved_threshold(int32_t reserved_threshold) {
+    thresholds.set_reserved_threshold(reserved_threshold);
+  }
+
+  void set_thresholds(int32_t mapped_threshold, int32_t reserved_threshold) {
+    thresholds.set_thresholds(mapped_threshold, reserved_threshold);
+  }
+
+  Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    auto &actions = plan_tasks(std::span<const taskid_t>(&task_id, 1), state);
+    if (!actions.empty()) {
+      return actions.front();
+    }
+    return fallback_action_for_task(task_id, state);
   }
 
   ActionList &map_tasks(std::span<const taskid_t> task_ids, const SchedulerState &state) override {

@@ -601,6 +601,48 @@ private:
       }
       return acc;
     }
+
+    void collect_lru_candidates(std::span<const dataid_t> used_ids, DataIDList &out) const {
+      out.clear();
+      node_t cur = nodes[0].prev;
+
+      if (used_ids.empty()) {
+        while (cur != 0) {
+          out.push_back(nodes[cur].id);
+          cur = nodes[cur].prev;
+        }
+        return;
+      }
+
+      while (cur != 0) {
+        const dataid_t id = nodes[cur].id;
+        if (!std::binary_search(used_ids.begin(), used_ids.end(), id)) {
+          out.push_back(id);
+        }
+        cur = nodes[cur].prev;
+      }
+    }
+
+    template <typename Visitor>
+    void visit_lru_candidates(std::span<const dataid_t> used_ids, Visitor &&visitor) const {
+      node_t cur = nodes[0].prev;
+
+      if (used_ids.empty()) {
+        while (cur != 0) {
+          visitor(nodes[cur].id, nodes[cur].bytes);
+          cur = nodes[cur].prev;
+        }
+        return;
+      }
+
+      while (cur != 0) {
+        const dataid_t id = nodes[cur].id;
+        if (!std::binary_search(used_ids.begin(), used_ids.end(), id)) {
+          visitor(id, nodes[cur].bytes);
+        }
+        cur = nodes[cur].prev;
+      }
+    }
   };
 
   std::vector<DeviceLRU> lrus_;
@@ -704,6 +746,20 @@ public:
     T4F_INVARIANT(accumulated >= mem_size && "getLRUids(): evictable memory size is smaller than requested");
     
     return id_buffer;
+  }
+
+  std::span<const dataid_t> getLRUCandidates(devid_t device_id,
+                                             std::span<const dataid_t> used_ids) const {
+    T4F_INVARIANT(is_valid_device(device_id));
+    lrus_[device_id].collect_lru_candidates(used_ids, id_buffer);
+    return id_buffer;
+  }
+
+  template <typename Visitor>
+  void visitLRUCandidates(devid_t device_id, std::span<const dataid_t> used_ids,
+                          Visitor &&visitor) const {
+    T4F_INVARIANT(is_valid_device(device_id));
+    lrus_[device_id].visit_lru_candidates(used_ids, std::forward<Visitor>(visitor));
   }
 
   mem_t get_mem(devid_t device_id) const {
@@ -1133,6 +1189,19 @@ public:
 
   [[nodiscard]] bool is_moving(dataid_t data_id, devid_t device_id) const {
     return movement_manager.is_moving(data_id, device_id);
+  }
+
+  [[nodiscard]] bool try_get_movement_remaining_time(dataid_t data_id, devid_t device_id,
+                                                     timecount_t current_time,
+                                                     timecount_t &remaining_time) const {
+    timecount_t completion_time = 0;
+    if (!movement_manager.try_get_time(data_id, device_id, completion_time)) {
+      return false;
+    }
+    T4F_INVARIANT(completion_time >= current_time &&
+                  "Outstanding move completion time cannot be in the past");
+    remaining_time = completion_time - current_time;
+    return true;
   }
 
   [[nodiscard]] mem_t total_size(const Data &data, std::span<const dataid_t> list) const {

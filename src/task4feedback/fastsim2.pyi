@@ -1256,6 +1256,18 @@ class EFTMapper(Mapper):
 
     def time_for_transfer(self, task_id: int, device_id: int, state: SchedulerState) -> int: ...
 
+class MemoryAwareEFTMapper(EFTMapper):
+    alpha: float
+
+    @overload
+    def __init__(self) -> None: ...
+
+    @overload
+    def __init__(self, num_tasks: int, num_devices: int, alpha: float = ...) -> None: ...
+
+    @overload
+    def __init__(self, other: MemoryAwareEFTMapper) -> None: ...
+
 class DequeueEFTMapper(EFTMapper):
     @overload
     def __init__(self) -> None: ...
@@ -1275,6 +1287,28 @@ class DataAwareMapper(Mapper):
 
     @overload
     def __init__(self, other: DataAwareMapper) -> None: ...
+
+class DARTSMapper(Mapper):
+    @overload
+    def __init__(self) -> None: ...
+
+    @overload
+    def __init__(self, num_tasks: int, num_devices: int) -> None: ...
+
+    @overload
+    def __init__(self, other: DARTSMapper) -> None: ...
+
+    @property
+    def mapped_threshold(self) -> int: ...
+
+    @mapped_threshold.setter
+    def mapped_threshold(self, arg: int, /) -> None: ...
+
+    @property
+    def reserved_threshold(self) -> int: ...
+
+    @reserved_threshold.setter
+    def reserved_threshold(self, arg: int, /) -> None: ...
 
 class IFeatureVector:
     @overload
@@ -2070,18 +2104,33 @@ EXTERNAL_MAPPING: ExecutionState = ExecutionState.EXTERNAL_MAPPING
 
 ERROR: ExecutionState = ExecutionState.ERROR
 
+class EvictionPolicy(enum.IntEnum):
+    LRU = 0
+
+    LEAST_USED_MAPPED = 1
+
+LRU: EvictionPolicy = EvictionPolicy.LRU
+
+LEAST_USED_MAPPED: EvictionPolicy = EvictionPolicy.LEAST_USED_MAPPED
+
 class SchedulerInput:
     @overload
-    def __init__(self, arg0: Graph, arg1: StaticTaskInfo, arg2: Data, arg3: Devices, arg4: Topology, arg5: TaskNoise, /) -> None: ...
+    def __init__(self, arg0: Graph, arg1: StaticTaskInfo, arg2: Data, arg3: Devices, arg4: Topology, arg5: TaskNoise, arg6: TransitionConditions, /) -> None: ...
 
     @overload
-    def __init__(self, arg0: Graph, arg1: StaticTaskInfo, arg2: Data, arg3: Devices, arg4: Topology, arg5: TaskNoise, arg6: HysteresisTransitionConditions, arg7: int, /) -> None: ...
-
-    @overload
-    def __init__(self, arg0: Graph, arg1: StaticTaskInfo, arg2: Data, arg3: Devices, arg4: Topology, arg5: TaskNoise, arg6: int, /) -> None: ...
+    def __init__(self, graph: Graph, tasks: StaticTaskInfo, data: Data, devices: Devices, topology: Topology, task_noise: TaskNoise, conditions: TransitionConditions, top_k_candidates: int = 1, eviction_policy: EvictionPolicy = EvictionPolicy.LRU, transfer_aware_data_launch_order: bool = False, /) -> None: ...
 
     @overload
     def __init__(self, arg: SchedulerInput) -> None: ...
+
+    @property
+    def top_k_candidates(self) -> int: ...
+
+    @property
+    def eviction_policy(self) -> EvictionPolicy: ...
+
+    @property
+    def transfer_aware_data_launch_order(self) -> bool: ...
 
 class Simulator:
     @overload

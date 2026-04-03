@@ -73,6 +73,13 @@ void init_mapper_ext(nb::module_ &m) {
       .def("time_for_transfer", &EFTMapper::time_for_transfer, "task_id"_a, "device_id"_a,
            "state"_a);
 
+  nb::class_<MemoryAwareEFTMapper, EFTMapper>(m, "MemoryAwareEFTMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t, double>(), "num_tasks"_a, "num_devices"_a,
+           "alpha"_a = 1.0)
+      .def(nb::init<MemoryAwareEFTMapper &>(), "other"_a)
+      .def_rw("alpha", &MemoryAwareEFTMapper::alpha);
+
   nb::class_<DequeueEFTMapper, EFTMapper>(m, "DequeueEFTMapper")
       .def(nb::init<>())
       .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
@@ -86,6 +93,23 @@ void init_mapper_ext(nb::module_ &m) {
       .def(
           "map_tasks",
           [](DataAwareMapper &mapper, const TaskIDList &tasks,
+             const SchedulerState &state) -> ActionList & {
+            return mapper.map_tasks(std::span<const taskid_t>(tasks), state);
+          },
+          "tasks"_a, "state"_a, nb::rv_policy::reference_internal);
+
+  nb::class_<DARTSMapper, Mapper>(m, "DARTSMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
+      .def(nb::init<DARTSMapper &>(), "other"_a)
+      .def_prop_rw("mapped_threshold", &DARTSMapper::get_mapped_threshold,
+                   &DARTSMapper::set_mapped_threshold)
+      .def_prop_rw("reserved_threshold", &DARTSMapper::get_reserved_threshold,
+                   &DARTSMapper::set_reserved_threshold)
+      .def("map_task", &DARTSMapper::map_task, "task_id"_a, "state"_a)
+      .def(
+          "map_tasks",
+          [](DARTSMapper &mapper, const TaskIDList &tasks,
              const SchedulerState &state) -> ActionList & {
             return mapper.map_tasks(std::span<const taskid_t>(tasks), state);
           },

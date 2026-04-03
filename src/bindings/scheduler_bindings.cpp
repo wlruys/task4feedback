@@ -92,6 +92,7 @@ void init_scheduler_ext(nb::module_ &m) {
       m, "DeviceThresholdTransitionConditions")
       .def(nb::init<>())
       .def(nb::init<int32_t, int32_t>(), "mapped_threshold"_a, "reserved_threshold"_a)
-      .def_ro("mapped_threshold", &DeviceThresholdTransitionConditions::mapped_threshold)
-      .def_ro("reserved_threshold", &DeviceThresholdTransitionConditions::reserved_threshold);
+      .def_prop_ro("mapped_threshold", &DeviceThresholdTransitionConditions::get_mapped_threshold)
+      .def_prop_ro("reserved_threshold",
+                   &DeviceThresholdTransitionConditions::get_reserved_threshold);
 }

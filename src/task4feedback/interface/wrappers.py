@@ -679,6 +679,8 @@ class SimulatorInput:
     task_noise: TaskNoise
     transition_conditions: fastsim.TransitionConditions
     top_k_candidates: int = 1
+    eviction_policy: fastsim.EvictionPolicy = fastsim.EvictionPolicy.LRU
+    transfer_aware_data_launch_order: bool = False
 
     def __init__(
         self,
@@ -688,6 +690,8 @@ class SimulatorInput:
         task_noise: Optional[TaskNoise] = None,
         transition_conditions: Optional[fastsim.TransitionConditions] = None,
         top_k_candidates: int = 1,
+        eviction_policy: fastsim.EvictionPolicy = fastsim.EvictionPolicy.LRU,
+        transfer_aware_data_launch_order: bool = False,
     ):
         if transition_conditions is None:
             transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
@@ -701,6 +705,8 @@ class SimulatorInput:
         self.system = system
         self.transition_conditions = transition_conditions
         self.top_k_candidates = top_k_candidates
+        self.eviction_policy = eviction_policy
+        self.transfer_aware_data_launch_order = transfer_aware_data_launch_order
 
     def to_input(self):
         return SchedulerInput(
@@ -712,6 +718,8 @@ class SimulatorInput:
             self.task_noise,
             self.transition_conditions,
             self.top_k_candidates,
+            self.eviction_policy,
+            self.transfer_aware_data_launch_order,
         )
 
 
