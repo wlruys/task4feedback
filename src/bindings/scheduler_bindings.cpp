@@ -92,7 +92,16 @@ void init_scheduler_ext(nb::module_ &m) {
       m, "DeviceThresholdTransitionConditions")
       .def(nb::init<>())
       .def(nb::init<int32_t, int32_t>(), "mapped_threshold"_a, "reserved_threshold"_a)
-      .def_prop_ro("mapped_threshold", &DeviceThresholdTransitionConditions::get_mapped_threshold)
-      .def_prop_ro("reserved_threshold",
-                   &DeviceThresholdTransitionConditions::get_reserved_threshold);
+      .def_prop_rw("mapped_threshold", &DeviceThresholdTransitionConditions::get_mapped_threshold,
+                   &DeviceThresholdTransitionConditions::set_mapped_threshold)
+      .def_prop_rw("reserved_threshold",
+                   &DeviceThresholdTransitionConditions::get_reserved_threshold,
+                   &DeviceThresholdTransitionConditions::set_reserved_threshold)
+      .def("set_thresholds", &DeviceThresholdTransitionConditions::set_thresholds,
+           "mapped_threshold"_a, "reserved_threshold"_a)
+      .def("use_mapped_threshold", &DeviceThresholdTransitionConditions::use_mapped_threshold,
+           "mapped_threshold"_a)
+      .def("use_reserved_threshold", &DeviceThresholdTransitionConditions::use_reserved_threshold,
+           "reserved_threshold"_a)
+      .def("disable_thresholds", &DeviceThresholdTransitionConditions::disable_thresholds);
 }

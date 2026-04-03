@@ -17,6 +17,7 @@ target_sources(backend
         include/devices.hpp
         include/communication.hpp
         include/events.hpp
+        include/kahypar_wrapper.hpp
         include/iterator.hpp
         include/macros.hpp
         include/noise.hpp
@@ -84,6 +85,42 @@ endif()
 
 if(ENABLE_PARMETIS)
   target_compile_definitions(backend PUBLIC ENABLE_PARMETIS)
+endif()
+
+if(ENABLE_KAHYPAR)
+  set(KAHYPAR_PREFIX $ENV{KAHYPAR_INSTALL_PATH})
+  if(NOT KAHYPAR_PREFIX)
+    message(FATAL_ERROR "ENV KAHYPAR_INSTALL_PATH is not set. Set it to the install prefix that contains include/ and lib/.")
+  endif()
+
+  set(KAHYPAR_CONFIG_FILE "$ENV{KAHYPAR_CONFIG_PATH}")
+  if(NOT KAHYPAR_CONFIG_FILE)
+    set(KAHYPAR_CONFIG_FILE "${KAHYPAR_PREFIX}/config/km1_kKaHyPar_sea20.ini")
+  endif()
+
+  find_path(KAHYPAR_INCLUDE_DIR NAMES libkahypar.h HINTS ${KAHYPAR_PREFIX}/include)
+  find_library(KAHYPAR_LIBRARY NAMES kahypar libkahypar HINTS ${KAHYPAR_PREFIX}/lib)
+
+  if(NOT KAHYPAR_INCLUDE_DIR OR NOT KAHYPAR_LIBRARY)
+    message(FATAL_ERROR "Could not find KaHyPar under ${KAHYPAR_PREFIX}.\n"
+                        "Checked ${KAHYPAR_PREFIX}/include and ${KAHYPAR_PREFIX}/lib.")
+  endif()
+
+  if(NOT EXISTS "${KAHYPAR_CONFIG_FILE}")
+    message(FATAL_ERROR "Could not find KaHyPar config file at ${KAHYPAR_CONFIG_FILE}.\n"
+                        "Set ENV KAHYPAR_CONFIG_PATH to a valid .ini file such as km1_kKaHyPar_sea20.ini.")
+  endif()
+
+  if(NOT TARGET KaHyPar::kahypar)
+    add_library(KaHyPar::kahypar SHARED IMPORTED)
+    set_target_properties(KaHyPar::kahypar PROPERTIES
+      IMPORTED_LOCATION "${KAHYPAR_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${KAHYPAR_INCLUDE_DIR}")
+  endif()
+
+  target_link_libraries(backend PUBLIC KaHyPar::kahypar)
+  target_compile_definitions(backend PUBLIC ENABLE_KAHYPAR)
+  target_compile_definitions(backend PUBLIC KAHYPAR_CONFIG_PATH=\"${KAHYPAR_CONFIG_FILE}\")
 endif()
 
 target_include_directories(backend
