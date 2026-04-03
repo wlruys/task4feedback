@@ -9,6 +9,26 @@ using namespace nb::literals;
 
 void init_scheduler_ext(nb::module_ &m) {
 
+  nb::class_<TaskDevicePhaseInfo>(m, "TaskDevicePhaseInfo")
+      .def("get_mapped_tasks",
+           [](const TaskDevicePhaseInfo &self, devid_t device_id) {
+             return as_sorted_vector(self.get_mapped_tasks(device_id));
+           },
+           "device_id"_a)
+      .def("get_reserved_tasks",
+           [](const TaskDevicePhaseInfo &self, devid_t device_id) {
+             return as_sorted_vector(self.get_reserved_tasks(device_id));
+           },
+           "device_id"_a)
+      .def("has_mapped", &TaskDevicePhaseInfo::has_mapped, "task_id"_a, "device_id"_a)
+      .def("has_reserved", &TaskDevicePhaseInfo::has_reserved, "task_id"_a, "device_id"_a)
+      .def("size", &TaskDevicePhaseInfo::size);
+
+  nb::class_<TaskDataUsageInfo>(m, "TaskDataUsageInfo")
+      .def("size", &TaskDataUsageInfo::size)
+      .def("get_mapped_usage", &TaskDataUsageInfo::get_mapped_usage, "data_id"_a)
+      .def("get_reserved_usage", &TaskDataUsageInfo::get_reserved_usage, "data_id"_a);
+
   nb::class_<SchedulerState>(m, "SchedulerState")
       .def("get_global_time", &SchedulerState::get_global_time)
       .def("get_mapping_priority", &SchedulerState::get_mapping_priority, "task_id"_a,
@@ -23,6 +43,25 @@ void init_scheduler_ext(nb::module_ &m) {
           nb::rv_policy::reference_internal)
       .def(
           "get_tasks", [](const SchedulerState &self) -> const auto & { return self.get_tasks(); },
+          nb::rv_policy::reference_internal)
+      .def("enable_task_device_phase_info", &SchedulerState::enable_task_device_phase_info,
+           "expected_tasks_per_device"_a = 0)
+      .def("disable_task_device_phase_info", &SchedulerState::disable_task_device_phase_info)
+      .def("has_task_device_phase_info", &SchedulerState::has_task_device_phase_info)
+      .def(
+          "get_task_device_phase_info",
+          [](const SchedulerState &self) -> const TaskDevicePhaseInfo * {
+            return self.get_task_device_phase_info();
+          },
+          nb::rv_policy::reference_internal)
+      .def("enable_task_data_usage_info", &SchedulerState::enable_task_data_usage_info)
+      .def("disable_task_data_usage_info", &SchedulerState::disable_task_data_usage_info)
+      .def("has_task_data_usage_info", &SchedulerState::has_task_data_usage_info)
+      .def(
+          "get_task_data_usage_info",
+          [](const SchedulerState &self) -> const TaskDataUsageInfo * {
+            return self.get_task_data_usage_info();
+          },
           nb::rv_policy::reference_internal);
 
   nb::class_<TransitionConditions>(m, "TransitionConditions")
@@ -48,4 +87,11 @@ void init_scheduler_ext(nb::module_ &m) {
       .def_ro("max_in_flight", &BatchTransitionConditions::max_in_flight)
       .def_ro("last_accessed", &BatchTransitionConditions::last_accessed)
       .def_ro("active_batch", &BatchTransitionConditions::active_batch);
+
+  nb::class_<DeviceThresholdTransitionConditions, TransitionConditions>(
+      m, "DeviceThresholdTransitionConditions")
+      .def(nb::init<>())
+      .def(nb::init<int32_t, int32_t>(), "mapped_threshold"_a, "reserved_threshold"_a)
+      .def_ro("mapped_threshold", &DeviceThresholdTransitionConditions::mapped_threshold)
+      .def_ro("reserved_threshold", &DeviceThresholdTransitionConditions::reserved_threshold);
 }

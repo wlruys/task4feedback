@@ -2,6 +2,7 @@
 #include "nbh.hpp"
 #include "scheduler.hpp"
 #include <cstdint>
+#include <span>
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -23,7 +24,11 @@ void init_mapper_ext(nb::module_ &m) {
 
   nb::class_<Mapper>(m, "Mapper")
       .def("map_task", &Mapper::map_task, "task_id"_a, "state"_a)
-      .def("map_tasks", &Mapper::map_tasks, "tasks"_a, "state"_a);
+      .def("map_tasks",
+           [](Mapper &m, const TaskIDList &tasks, const SchedulerState &state) -> ActionList & {
+             return m.map_tasks(std::span<const taskid_t>(tasks), state);
+           },
+           "tasks"_a, "state"_a, nb::rv_policy::reference_internal);
 
   nb::class_<RandomMapper, Mapper>(m, "RandomMapper")
       .def(nb::init<>())
@@ -72,4 +77,17 @@ void init_mapper_ext(nb::module_ &m) {
       .def(nb::init<>())
       .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
       .def(nb::init<DequeueEFTMapper &>(), "other"_a);
+
+  nb::class_<DataAwareMapper, Mapper>(m, "DataAwareMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
+      .def(nb::init<DataAwareMapper &>(), "other"_a)
+      .def("map_task", &DataAwareMapper::map_task, "task_id"_a, "state"_a)
+      .def(
+          "map_tasks",
+          [](DataAwareMapper &mapper, const TaskIDList &tasks,
+             const SchedulerState &state) -> ActionList & {
+            return mapper.map_tasks(std::span<const taskid_t>(tasks), state);
+          },
+          "tasks"_a, "state"_a, nb::rv_policy::reference_internal);
 }

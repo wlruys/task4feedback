@@ -28,6 +28,7 @@ from task4feedback.fastsim2 import (
     RangeTransitionConditions,
     DefaultTransitionConditions,
     BatchTransitionConditions,
+    DeviceThresholdTransitionConditions,
     SchedulerState,
     Simulator,
     ExecutionState,
@@ -2072,6 +2073,8 @@ class SimulatorDriver:
 
         self.internal_mapper = internal_mapper
         self.external_mapper = external_mapper
+        self.observer_factory = None
+        self.observer = None
 
         if simulator is None:
             self.simulator = fastsim.Simulator(input.to_input(), self.internal_mapper)

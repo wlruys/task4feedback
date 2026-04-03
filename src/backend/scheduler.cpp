@@ -115,6 +115,22 @@ void Scheduler::remove_mapped_tasks(ActionList &action_list) {
   queues.mappable.remove(positions);
 }
 
+void Scheduler::apply_mapped_actions(std::span<const taskid_t> candidates, ActionList &actions) {
+  newly_mappable_buffer.clear();
+
+  for (auto &action : actions) {
+    const auto task_id = candidates[action.pos];
+    map_task(task_id, action);
+
+    newly_mappable_buffer.insert(newly_mappable_buffer.end(),
+                                compute_task_buffer.begin(),
+                                compute_task_buffer.end());
+  }
+
+  remove_mapped_tasks(actions);
+  push_mappable(newly_mappable_buffer);
+}
+
 ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
                                                 EventManager &event_manager) {
   ZoneScoped;
@@ -122,43 +138,23 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
   auto &s = this->state;
   auto &scheduler_conditions = conditions.get();
   const auto current_time = s.global_time;
-  auto &mappable = queues.mappable;
-  auto top_k_tasks = mappable.get_top_k();
-
-  python_mapper_buffer.clear();
 
   if (!action_list.empty()) {
-    for (auto &action : action_list) {
-      const auto task_id = top_k_tasks[action.pos];
-      map_task(task_id, action);
-
-      python_mapper_buffer.reserve(python_mapper_buffer.size() + compute_task_buffer.size());
-      std::copy(compute_task_buffer.begin(), compute_task_buffer.end(),
-                std::back_inserter(python_mapper_buffer));
-    }
-
-    remove_mapped_tasks(action_list);
-    SPDLOG_DEBUG("Time:{} Newly mappable tasks: {}", current_time, python_mapper_buffer.size());
-    push_mappable(python_mapper_buffer);
+    auto candidates = collect_candidates();
+    apply_mapped_actions(candidates, action_list);
+    SPDLOG_DEBUG("Time:{} Newly mappable tasks: {}", current_time, newly_mappable_buffer.size());
   }
-
-  /*If we still should be mapping, continue making calls to the mapper */
 
   if (queues.has_mappable() && scheduler_conditions.should_map(s, queues)) {
     return ExecutionState::EXTERNAL_MAPPING;
   } else {
-
     if (has_pending_step_breakpoint()) {
-      // TODO(wlr): Currently breakpoints of Python mappers are broken.
-      // TODO(wlr): Not sure if this is still true. Need to test.
       SPDLOG_DEBUG("Time:{} Breaking from mapper", current_time);
-      timecount_t mapper_time = current_time;
-      event_manager.create_event(EventType::MAPPER, mapper_time);
+      event_manager.create_event(EventType::MAPPER, current_time);
       return ExecutionState::BREAKPOINT;
     } else {
       SPDLOG_DEBUG("Time:{} Ending mapper", current_time);
-      timecount_t reserver_time = current_time + TIME_TO_RESERVE;
-      event_manager.create_event(EventType::RESERVER, reserver_time);
+      event_manager.create_event(EventType::RESERVER, current_time + TIME_TO_RESERVE);
       return ExecutionState::RUNNING;
     }
   }
@@ -184,7 +180,6 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
 
   success_count = 0;
   auto &s = this->state;
-  auto &task_runtime = s.task_runtime;
   auto &scheduler_conditions = conditions.get();
   auto &mappable = queues.mappable;
   auto current_time = s.global_time;
@@ -201,21 +196,15 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
       break;
     }
 
-    taskid_t task_id = mappable.top();
-    mappable.pop();
-    T4F_INVARIANT(task_runtime.is_compute_mappable(task_id));
-    Action action = mapper.map_task(task_id, s);
-    map_task(task_id, action);
-
-    push_mappable(compute_task_buffer);
+    auto candidates = collect_candidates();
+    ActionList &actions = mapper.map_tasks(candidates, s);
+    apply_mapped_actions(candidates, actions);
   }
 
   if (break_flag) {
-    timecount_t mapper_time = current_time;
-    event_manager.create_event(EventType::MAPPER, mapper_time);
+    event_manager.create_event(EventType::MAPPER, current_time);
   } else {
-    timecount_t reserver_time = current_time + SCHEDULER_TIME_GAP;
-    event_manager.create_event(EventType::RESERVER, reserver_time);
+    event_manager.create_event(EventType::RESERVER, current_time + SCHEDULER_TIME_GAP);
   }
 }
 
