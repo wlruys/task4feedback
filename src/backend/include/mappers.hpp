@@ -2109,6 +2109,7 @@ private:
     S1 = 2,
     EXTENDED_S2 = 3,
     EXTENDED_S3 = 4,
+    LOCAL_DATA = 5,  // all read data already present on device (zero transfer cost)
   };
 
   std::vector<CandidateTask> candidate_tasks;
@@ -2170,9 +2171,17 @@ private:
   }
 
   // Claim the best block and all missing blocks of emitted tasks for device_id.
+  // True when claimed_for_device[] should be maintained and consulted.
+  // Active when either:
+  //   - intra_window_coordination: classical IWC flag (enables cascade + cross-device blocking)
+  //   - push_pipeline_depth > 0: pipeline-fill mode implicitly needs claimed tracking
+  [[nodiscard]] bool use_claimed_tracking() const {
+    return intra_window_coordination || push_pipeline_depth > 0;
+  }
+
   void claim_blocks_for_device(dataid_t best_block_id, devid_t device_id,
                                const SchedulerState &state) {
-    if (!intra_window_coordination) {
+    if (!use_claimed_tracking()) {
       return;
     }
     const auto n_data = claimed_for_device.size();
@@ -2182,18 +2191,40 @@ private:
         claimed_for_device[idx] = device_id;
       }
     };
-    mark(best_block_id);
+    // Only claim data that is NOT already locally committed on device_id.
+    // Claiming already-local data would block other GPUs from transferring it
+    // as a missing block for their own tasks — an unnecessary conflict.
+    // The cascade benefit only comes from "in-flight" data (needed transfers);
+    // locally-present data is already free on this device and irrelevant to others.
+    const auto mark_if_missing = [&](dataid_t data_id) {
+      if (state.get_data_manager().check_valid_mapped(data_id, device_id)) {
+        return;  // already committed on this device — don't claim
+      }
+      const auto idx = static_cast<std::size_t>(data_id);
+      if (idx < n_data && claimed_for_device[idx] == static_cast<devid_t>(-1)) {
+        claimed_for_device[idx] = device_id;
+      }
+    };
+    mark_if_missing(best_block_id);
     const auto &tasks = state.get_tasks();
     for (const auto task_id : trace_emitted_tasks_buffer) {
       for (const auto data_id : tasks.get_read(task_id)) {
-        mark(data_id);
+        mark_if_missing(data_id);
+      }
+      // simulate_memory: also mark WRITE data (output) of emitted tasks as planned.
+      // This extends the cascade to producer-consumer chains (e.g. Cholesky) where
+      // task A's output is input to task B in the same candidate pool.
+      if (simulate_memory) {
+        for (const auto data_id : tasks.get_write(task_id)) {
+          mark_if_missing(data_id);
+        }
       }
     }
   }
 
   // true if block is infeasible for device_id because another device claimed it.
   [[nodiscard]] bool is_claimed_by_other(dataid_t data_id, devid_t device_id) const {
-    if (!intra_window_coordination) {
+    if (!use_claimed_tracking()) {
       return false;
     }
     const auto idx = static_cast<std::size_t>(data_id);
@@ -2211,7 +2242,7 @@ private:
     if (state.get_data_manager().check_valid_mapped(data_id, device_id)) {
       return true;
     }
-    if (!intra_window_coordination) {
+    if (!use_claimed_tracking()) {
       return false;
     }
     const auto idx = static_cast<std::size_t>(data_id);
@@ -2526,6 +2557,29 @@ private:
 
   void collect_selected_devices(const SchedulerState &state) {
     selected_devices_buffer.clear();
+
+    // Classical DARTS mode: process exactly ONE device per trigger, matching the
+    // StarPU per-GPU reactive scheduling model.  When true, the under-threshold
+    // device with the minimum current mapped time (most starved) is selected.
+    // This prevents multiple GPUs from competing for the same data block within
+    // a single plan_tasks call, eliminating the N-fold data movement that occurs
+    // when all idle GPUs independently pick the same best block.
+    if (single_device_per_trigger && pipeline_depth == 0) {
+      thresholds.append_under_threshold_gpu_devices(state, selected_devices_buffer);
+      if (selected_devices_buffer.size() > 1) {
+        // Keep only the most-starved device (minimum mapped time).
+        const auto best_it = std::min_element(
+            selected_devices_buffer.begin(), selected_devices_buffer.end(),
+            [&](devid_t a, devid_t b) {
+              return state.costs.get_mapped_time(a) < state.costs.get_mapped_time(b);
+            });
+        const devid_t best_dev = *best_it;
+        selected_devices_buffer.clear();
+        selected_devices_buffer.push_back(best_dev);
+      }
+      return;
+    }
+
     if (pipeline_depth > 0) {
       const auto &devices = state.get_devices();
       const auto &counts = state.counts;
@@ -2838,6 +2892,8 @@ private:
       return "extended_s2";
     case DecisionReason::EXTENDED_S3:
       return "extended_s3";
+    case DecisionReason::LOCAL_DATA:
+      return "local_data";
     case DecisionReason::FALLBACK:
     default:
       return "fallback";
@@ -2847,6 +2903,33 @@ private:
   DecisionReason emit_actions_for_device(devid_t device_id, int32_t best_block_index,
                                          int32_t fallback_task_index) {
     trace_emitted_tasks_buffer.clear();
+
+    // Local-data priority pass: emit tasks that have ALL their read data already
+    // present on this device (missing_count == 0, zero transfer cost).  These are
+    // strictly free to run and should always be preferred over any block-loading
+    // scheme — particularly important in abundant-memory / transfer-dominated regimes
+    // where DARTS's block heuristic would otherwise skip them in favour of tasks
+    // that "need" a block to be loaded, causing unnecessary large data transfers.
+    emit_task_indices_buffer.clear();
+    for (std::size_t task_index = 0; task_index < candidate_tasks.size(); ++task_index) {
+      const auto &task_rec = candidate_tasks[task_index];
+      const auto &device_record = device_candidate_records[task_index];
+      if (!task_rec.active || !device_record.compatible || device_record.missing_count != 0) {
+        continue;
+      }
+      emit_task_indices_buffer.push_back(static_cast<int32_t>(task_index));
+    }
+    if (!emit_task_indices_buffer.empty()) {
+      std::sort(emit_task_indices_buffer.begin(), emit_task_indices_buffer.end(),
+                [&](int32_t lhs, int32_t rhs) {
+                  return better_task_index(lhs, rhs, candidate_tasks);
+                });
+      // Emit all locally-available tasks (no cap — they're free, no block loading needed).
+      for (const auto task_index : emit_task_indices_buffer) {
+        append_action(task_index, device_id);
+      }
+      return DecisionReason::LOCAL_DATA;
+    }
 
     if (best_block_index >= 0) {
       const auto &best_block = frontier_blocks[static_cast<std::size_t>(best_block_index)];
@@ -2935,42 +3018,93 @@ private:
 
     reset_claimed_for_window(n_data);
 
+    // Global EFT batch mode: bypass per-device DARTS logic and use task-first
+    // EFT with per-device planned-data tracking across all selected devices.
+    // This matches DequeueEFTMapper quality (data-affinity cascades) while
+    // preserving DARTS's DeviceThreshold transition semantics.
+    if (global_eft_batch && !selected_devices_buffer.empty()) {
+      emit_eft_global_batch(state);
+      return action_buffer;
+    }
+
     // DARTSMapper requires device thresholds to be configured (mapped or reserved).
     // When thresholds are disabled (both -1), no devices are selected and no actions
     // are emitted. Use use_mapped_threshold() or use_reserved_threshold() before mapping.
     for (const auto device_id : selected_devices_buffer) {
-      // (cascade): repeat analysis for this device while new S0 tasks are
-      // unlocked by previously claimed blocks.  Without intra_window_coordination
-      // this loop executes exactly once (same behaviour as classic).
-      const int max_cascade = intra_window_coordination ? cascade_passes : 1;
+      // Determine how many cascade passes to run for this device.
+      //
+      // Classical DARTS (push_pipeline_depth == 0):
+      //   - Without IWC: 1 pass (one block per device per trigger).
+      //   - With IWC:    cascade_passes (default 3) — chain of data-dependency unlocks.
+      //
+      // Push-pipeline mode (push_pipeline_depth > 0):
+      //   - Run up to push_pipeline_depth passes.  Each pass claims an independent block
+      //     and emits its S0 tasks, filling the device's execution pipeline.  Claimed
+      //     data is tracked cross-device to prevent N-fold duplication (IWC semantics
+      //     are active regardless of the intra_window_coordination flag).
+      //   - This is the key push-model adaptation: StarPU's pull model fills each GPU's
+      //     planned_task queue in one shot; we replicate that by running many passes.
+      const int max_cascade = (push_pipeline_depth > 0) ? push_pipeline_depth
+                              : (intra_window_coordination ? cascade_passes : 1);
       for (int pass = 0; pass < max_cascade; ++pass) {
         const auto active_candidates = active_candidate_count();
         if (active_candidates == 0) {
           break;
         }
         int32_t best_fallback_task = build_device_block_stats(device_id, state);
-        const int32_t best_block_index = choose_best_block_for_device();
+        int32_t best_block_index = choose_best_block_for_device();
 
-        // When finish_time_aware and no block-based match, use EFT-style fallback
-        // that considers device load + transfer + compute to pick the best task in frontier.
-        if (finish_time_aware && best_block_index < 0 && best_fallback_task >= 0) {
-          best_fallback_task = fallback_task_for_device_eft(device_id, state);
+        // When finish_time_aware, use EFT-style fallback that considers device load
+        // + total transfer + compute to pick the globally cheapest task:
+        //   (a) When no block was found (best_block_index < 0): always use EFT.
+        //   (b) When the best block has NO S0 tasks (only S1+ tasks remain): the
+        //       DARTS block heuristic would pick a task that still needs 2+ more
+        //       transfers after loading the best block.  EFT gives a better estimate
+        //       of actual finish time and avoids misassigning tasks to devices that
+        //       don't have enough of their data.  Override to EFT and suppress the
+        //       block-based path by clearing best_block_index.
+        //   (c) When the best block is transfer-dominated (sum of S0 compute < transfer
+        //       time): the data movement cost outweighs the batch-emission benefit.
+        //       EFT picks the task that minimises total finish time with proper data
+        //       affinity.  This fires in transfer-heavy regimes (r_interior >> 1).
+        if (finish_time_aware && best_fallback_task >= 0) {
+          const bool no_block = (best_block_index < 0);
+          const bool block_only_s1_plus =
+              (best_block_index >= 0) &&
+              (frontier_blocks[static_cast<std::size_t>(best_block_index)].s0_count == 0);
+          const bool block_transfer_dominated =
+              (best_block_index >= 0) &&
+              (frontier_blocks[static_cast<std::size_t>(best_block_index)].c0_compute <
+               frontier_blocks[static_cast<std::size_t>(best_block_index)].transfer_time);
+          if (no_block || block_only_s1_plus || block_transfer_dominated) {
+            best_fallback_task = fallback_task_for_device_eft(device_id, state);
+            // Suppress block-based emission so that emit_actions_for_device falls
+            // through to the fallback path.
+            best_block_index = -1;
+          }
         }
 
         const std::size_t actions_before = action_buffer.size();
         const auto reason =
             emit_actions_for_device(device_id, best_block_index, best_fallback_task);
-        log_device_decision(device_id, best_block_index, reason, active_candidates, state);
+        // For LOCAL_DATA decisions, log without a block reference (no block was loaded).
+        const int32_t log_block_index =
+            (reason == DecisionReason::LOCAL_DATA) ? -1 : best_block_index;
+        log_device_decision(device_id, log_block_index, reason, active_candidates, state);
 
-        if (best_block_index >= 0) {
+        if (best_block_index >= 0 && reason != DecisionReason::LOCAL_DATA) {
           claim_blocks_for_device(
               frontier_blocks[static_cast<std::size_t>(best_block_index)].data_id,
               device_id, state);
         }
         reset_frontier();
 
-        // Stop cascading if no new actions were emitted or it was a fallback.
-        if (action_buffer.size() == actions_before || reason == DecisionReason::FALLBACK) {
+        // Stop cascading if no new actions were emitted, it was a fallback, or all
+        // remaining tasks were locally available (LOCAL_DATA: no block was claimed,
+        // so no new tasks become locally available in subsequent passes).
+        if (action_buffer.size() == actions_before ||
+            reason == DecisionReason::FALLBACK ||
+            reason == DecisionReason::LOCAL_DATA) {
           break;
         }
       }
@@ -2992,6 +3126,45 @@ public:
   bool intra_window_coordination = false;
   int32_t cascade_passes = 3;
   bool finish_time_aware = false;
+  // Push-pipeline mode: number of independent cascade passes per device per trigger.
+  // 0 = classical DARTS (use cascade_passes; IWC flag controls cascade).
+  // > 0 = fill the device pipeline with this many independently-chosen blocks.
+  //   Each pass claims the next-best unclaimed block (IWC semantics forced on),
+  //   enabling transfer-compute overlap for the next trigger cycle.
+  //   Analogous to StarPU DARTS filling planned_task[] in one shot.
+  //   Recommended value: ~N_candidates / N_gpus (e.g. 16 for 64-task Jacobi / 4 GPUs).
+  int32_t push_pipeline_depth = 0;
+  // simulate_memory: extend the claimed-data cascade to include WRITE outputs of
+  // emitted tasks.  When task T is planned for device D and writes data O, subsequent
+  // tasks that read O see it as "virtually present" on D (zero transfer cost).
+  // Replicates StarPU's STARPU_DARTS_SIMULATE_MEMORY=1 behaviour.
+  // Useful for producer-consumer chains (e.g. Cholesky) where dependent tasks share
+  // the candidate pool.  For iterative workloads (Jacobi) the benefit is minimal
+  // since consumers become eligible only after producers complete.
+  bool simulate_memory = false;
+  // Global EFT batch mode: when true, plan_tasks replaces the per-device DARTS
+  // loop with emit_eft_global_batch() — task-first EFT across all selected
+  // devices simultaneously, with in-batch planned-data locality tracking.
+  // This closely matches DequeueEFTMapper quality while keeping DeviceThreshold
+  // transition semantics.  Ideal for abundant-memory / transfer-dominated
+  // workloads where DARTS block heuristics underperform.  Orthogonal to
+  // finish_time_aware (both can be enabled; global_eft_batch takes priority).
+  bool global_eft_batch = false;
+  // Per-device task cap for global_eft_batch.  1 = one task per GPU per trigger
+  // (safe but no pipeline overlap).  Higher values (4-16) enable transfer-compute
+  // pipelining similar to DequeueEFTMapper, at the cost of more in-flight tasks.
+  // The planned-data cascade means data fetched for earlier tasks in the batch is
+  // treated as free for later tasks on the same device.
+  int32_t global_eft_batch_cap = 1;
+  // Classical StarPU DARTS mode: process exactly one device per plan_tasks call.
+  // In StarPU, DARTS is invoked reactively per-GPU (one GPU pulls work at a
+  // time).  Our multi-device framework calls plan_tasks for all idle GPUs
+  // simultaneously, which causes N-fold data movement when multiple GPUs
+  // independently select the same best block.  This flag restores the
+  // single-device-per-trigger semantics by selecting only the most-starved
+  // GPU per plan_tasks call, preventing cross-GPU block competition.
+  // Pair with intra_window_coordination=true for cascade within the device.
+  bool single_device_per_trigger = false;
   // Pipeline-depth mode (active when pipeline_depth > 0):
   //   - pipeline_depth: normal pipelining target — keep this many tasks per GPU.
   //   - starvation_threshold: emergency lower bound — when the global cap is hit,
@@ -3005,6 +3178,130 @@ public:
   int32_t pipeline_depth = 0;
   int32_t starvation_threshold = 1;
   int32_t max_in_flight = 0;
+
+  // ---------------------------------------------------------------------------
+  // Global EFT batch: task-first EFT across ALL selected devices at once.
+  // Maintains per-device "planned data" tracking so that once a task is
+  // assigned to device D and will transfer data X, subsequent tasks that also
+  // need X on D see it as free (xfer_cost = 0).  This replicates the locality-
+  // cascade behaviour of DequeueEFTMapper while keeping DARTS's DeviceThreshold
+  // transition semantics.  Called from plan_tasks when global_eft_batch=true.
+  // ---------------------------------------------------------------------------
+  void emit_eft_global_batch(const SchedulerState &state) {
+    const auto &tasks_static = state.get_tasks();
+    const auto &data_manager = state.get_data_manager();
+    const auto &comm = state.get_communication_manager();
+    const auto &topology = state.get_topology();
+    const auto &data = state.get_data();
+    const auto n_devs = static_cast<std::size_t>(state.get_devices().size());
+
+    // Initialize device EFT time estimates from current scheduler state
+    std::vector<timecount_t> dev_eft(n_devs, 0);
+    for (const devid_t d : selected_devices_buffer) {
+      dev_eft[static_cast<std::size_t>(d)] = state.costs.get_mapped_time(d);
+    }
+
+    // Per-device: data_id → already committed to arrive here in this batch
+    std::vector<ankerl::unordered_dense::set<dataid_t>> planned_data(n_devs);
+
+    // Helper: compute transfer time for task on device_id, accounting for
+    // both committed state AND planned-in-batch data.
+    auto compute_xfer_for_task = [&](const CandidateTask &task, devid_t d) -> timecount_t {
+      const auto dev_idx = static_cast<std::size_t>(d);
+      timecount_t xfer = 0;
+      for (const dataid_t did : tasks_static.get_read(task.task_id)) {
+        if (device_in_mask(data_manager.get_mapped_location_flags(did), d)) {
+          continue;  // already in committed state
+        }
+        if (planned_data[dev_idx].count(did)) {
+          continue;  // will arrive from an earlier in-batch assignment
+        }
+        const auto flags = data_manager.get_mapped_location_flags(did);
+        const auto req = comm.get_best_source(topology, d, flags);
+        if (req.found) {
+          xfer += comm.ideal_time_to_transfer(topology, data.get_size(did), req.source, d);
+        }
+      }
+      return xfer;
+    };
+
+    // Per-device cap: emit at most this many tasks per device per trigger.
+    // Using cap=1 matches DequeueEFTMapper's one-task-at-a-time semantics and
+    // prevents memory overflow when many candidates are queued simultaneously.
+    // Planned-data tracking is still useful when cap > 1 and data is shared
+    // across tasks assigned to the same device within the same trigger window.
+    const int32_t tasks_per_device_cap = global_eft_batch_cap;
+    std::vector<int32_t> tasks_emitted(n_devs, 0);
+
+    // Task-first EFT: repeatedly pick globally cheapest (task, device) pair
+    // until each selected device has reached its per-trigger cap.
+    while (true) {
+      // Check if all selected devices have hit their cap
+      bool all_capped = true;
+      for (const devid_t d : selected_devices_buffer) {
+        if (tasks_emitted[static_cast<std::size_t>(d)] < tasks_per_device_cap) {
+          all_capped = false;
+          break;
+        }
+      }
+      if (all_capped) {
+        break;
+      }
+
+      int32_t best_task = -1;
+      devid_t best_dev = -1;
+      timecount_t best_score = std::numeric_limits<timecount_t>::max();
+
+      for (const devid_t d : selected_devices_buffer) {
+        if (tasks_emitted[static_cast<std::size_t>(d)] >= tasks_per_device_cap) {
+          continue;  // this device has hit its cap for this trigger
+        }
+        const timecount_t dev_time = dev_eft[static_cast<std::size_t>(d)];
+
+        for (std::size_t ti = 0; ti < candidate_tasks.size(); ++ti) {
+          const auto &task = candidate_tasks[ti];
+          if (!task.active || !task_supports_device(task, d)) {
+            continue;
+          }
+
+          const timecount_t xfer = compute_xfer_for_task(task, d);
+          const timecount_t score = dev_time + xfer + task.canonical_duration;
+          if (score < best_score ||
+              (score == best_score &&
+               (best_dev > d || (best_dev == d && static_cast<int32_t>(ti) < best_task)))) {
+            best_score = score;
+            best_task = static_cast<int32_t>(ti);
+            best_dev = d;
+          }
+        }
+      }
+
+      if (best_task < 0) {
+        break;
+      }
+
+      // Commit assignment
+      append_action(best_task, best_dev);
+      dev_eft[static_cast<std::size_t>(best_dev)] = best_score;
+      tasks_emitted[static_cast<std::size_t>(best_dev)]++;
+      candidate_tasks[static_cast<std::size_t>(best_task)].active = false;
+
+      // Mark all read and write data of the assigned task as planned-locally-present
+      // on best_dev.  Read data prevents re-fetching shared inputs for subsequent
+      // tasks on the same device.  Write data is the key EFT cascade: once T1 is
+      // assigned to D and will produce O1 at time dev_eft[D], subsequent tasks
+      // needing O1 see it as free on D (start time is bounded by dev_eft[D], which
+      // is at least T1's finish time, so O1 is always ready when they start).
+      const auto &task_rec = candidate_tasks[static_cast<std::size_t>(best_task)];
+      const auto best_dev_idx = static_cast<std::size_t>(best_dev);
+      for (const dataid_t did : tasks_static.get_read(task_rec.task_id)) {
+        planned_data[best_dev_idx].insert(did);
+      }
+      for (const dataid_t did : tasks_static.get_write(task_rec.task_id)) {
+        planned_data[best_dev_idx].insert(did);
+      }
+    }
+  }
 
   DARTSMapper() = default;
 

@@ -1,0 +1,26 @@
+benchmark,grid_n,steps,level_memory_gb,level_memory_bytes,mapper_name,eviction_policy_name,series_label,avg_sim_s,avg_total_mv,avg_evict_mv,n_runs
+jacobi,8,256,60.0,60000000000,dequeue_eft,lru,DequeueEFTMapper + LRU,31.42694,11629875000000.0,0.0,1
+jacobi,8,256,60.0,60000000000,memory_aware_eft,lru,"MemoryAwareEFTMapper(alpha=1,locations=mapped,overflow_state=reserved,overflow_mode=full_spill) + LRU",31.42694,11629875000000.0,0.0,1
+jacobi,8,256,60.0,60000000000,darts,lru,"DARTSMapper(ext_batch,cap=2,mt=0) + LRU",34.860716,13881937500000.0,0.0,1
+jacobi,8,256,60.0,60000000000,block_cyclic,lru,ExternalBlockCyclicMapper + LRU,30.052535,10873875000000.0,0.0,1
+jacobi,8,256,60.0,60000000000,row_cyclic,lru,ExternalRowCyclicMapper + LRU,30.042121,5496187500000.0,0.0,1
+jacobi,8,256,80.0,80000000000,dequeue_eft,lru,DequeueEFTMapper + LRU,41.582975,15415250000000.0,0.0,1
+jacobi,8,256,80.0,80000000000,memory_aware_eft,lru,"MemoryAwareEFTMapper(alpha=1,locations=mapped,overflow_state=reserved,overflow_mode=full_spill) + LRU",41.582975,15415250000000.0,0.0,1
+jacobi,8,256,80.0,80000000000,darts,lru,"DARTSMapper(ext_batch,cap=2,mt=0) + LRU",50.172706,19256500000000.0,0.0,1
+jacobi,8,256,80.0,80000000000,block_cyclic,lru,ExternalBlockCyclicMapper + LRU,40.068613,14498500000000.0,0.0,1
+jacobi,8,256,80.0,80000000000,row_cyclic,lru,ExternalRowCyclicMapper + LRU,40.054724,7328250000000.0,0.0,1
+jacobi,8,256,100.0,100000000000,dequeue_eft,lru,DequeueEFTMapper + LRU,51.724496,19101875000000.0,0.0,1
+jacobi,8,256,100.0,100000000000,memory_aware_eft,lru,"MemoryAwareEFTMapper(alpha=1,locations=mapped,overflow_state=reserved,overflow_mode=full_spill) + LRU",52.124888,19398750000000.0,0.0,1
+jacobi,8,256,100.0,100000000000,darts,lru,"DARTSMapper(ext_batch,cap=2,mt=0) + LRU",62.752456,22547812500000.0,0.0,1
+jacobi,8,256,100.0,100000000000,block_cyclic,lru,ExternalBlockCyclicMapper + LRU,50.08884,18123125000000.0,0.0,1
+jacobi,8,256,100.0,100000000000,row_cyclic,lru,ExternalRowCyclicMapper + LRU,50.077264,9160312500000.0,0.0,1
+jacobi,8,256,120.0,120000000000,dequeue_eft,lru,DequeueEFTMapper + LRU,61.526828,23013750000000.0,0.0,1
+jacobi,8,256,120.0,120000000000,memory_aware_eft,lru,"MemoryAwareEFTMapper(alpha=1,locations=mapped,overflow_state=reserved,overflow_mode=full_spill) + LRU",61.92979,24179625000000.0,0.0,1
+jacobi,8,256,120.0,120000000000,darts,lru,"DARTSMapper(ext_batch,cap=2,mt=0) + LRU",79.199959,26533500000000.0,0.0,1
+jacobi,8,256,120.0,120000000000,block_cyclic,lru,ExternalBlockCyclicMapper + LRU,60.105,21747750000000.0,0.0,1
+jacobi,8,256,120.0,120000000000,row_cyclic,lru,ExternalRowCyclicMapper + LRU,60.077202,10992375000000.0,0.0,1
+jacobi,8,256,140.0,140000000000,dequeue_eft,lru,DequeueEFTMapper + LRU,73.763787,27743187500000.0,0.0,1
+jacobi,8,256,140.0,140000000000,memory_aware_eft,lru,"MemoryAwareEFTMapper(alpha=1,locations=mapped,overflow_state=reserved,overflow_mode=full_spill) + LRU",73.588656,26601312500000.0,0.0,1
+jacobi,8,256,140.0,140000000000,darts,lru,"DARTSMapper(ext_batch,cap=2,mt=0) + LRU",104.863144,32137875000000.0,0.0,1
+jacobi,8,256,140.0,140000000000,block_cyclic,lru,ExternalBlockCyclicMapper + LRU,70.112992,25372375000000.0,0.0,1
+jacobi,8,256,140.0,140000000000,row_cyclic,lru,ExternalRowCyclicMapper + LRU,70.084635,12824437500000.0,0.0,1

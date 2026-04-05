@@ -53,7 +53,7 @@ class TransitionConfig:
     hysteresis_open: int = 16
     hysteresis_close: int = 36
     hysteresis_starvation: int = 2
-    pipeline_depth: int = 4
+    pipeline_depth: int = 2
     pipeline_starvation: int = 1
 
 
@@ -75,14 +75,33 @@ class DARTSConfig:
         mapped_threshold / reserved_threshold control device selection via
         DeviceThresholdState.
     """
-    mapped_threshold: int = 0
-    reserved_threshold: int = -1
-    extended_frontier: bool = False
-    extended_batch: bool = False
-    extended_batch_cap: int = 4
+    # Device selection (legacy threshold mode, pipeline_depth == 0)
+    mapped_threshold: int = 0   # map only to idle devices (0 tasks mapped)
+    reserved_threshold: int = -1  # reserved threshold disabled
+    # Frontier / batch emission (enabled by default — sweet spot from sweep)
+    extended_frontier: bool = True
+    extended_batch: bool = True
+    extended_batch_cap: int = 2  # cap=2 consistently outperformed cap=4 in sweeps
     intra_window_coordination: bool = False
     cascade_passes: int = 3
     finish_time_aware: bool = False
+    # Push-pipeline mode: number of cascade passes per device per trigger.
+    # 0 = classical DARTS (governed by cascade_passes + intra_window_coordination).
+    # >0 = fill the pipeline with this many blocks per device per trigger;
+    #      cross-device IWC is implicitly enabled to prevent N-fold data duplication.
+    push_pipeline_depth: int = 0
+    # simulate_memory: also treat emitted tasks' WRITE data as "virtually present"
+    # (extends cascade to producer-consumer chains; minimal gain for iterative stencils).
+    simulate_memory: bool = False
+    # Global EFT batch mode: task-first EFT with planned-data tracking across
+    # all selected devices.  Matches DequeueEFTMapper quality in abundant-memory
+    # regimes while keeping DeviceThreshold transition semantics.
+    global_eft_batch: bool = False
+    # Per-device task cap for global_eft_batch (1=safe, 4-16=pipelined).
+    global_eft_batch_cap: int = 1
+    # Classical DARTS mode: one device per trigger (matches StarPU's per-GPU model).
+    single_device_per_trigger: bool = False
+    # Pipeline-depth mode (disabled by default)
     pipeline_depth: int = 0
     starvation_threshold: int = 1
     max_in_flight: int = 0
@@ -150,7 +169,7 @@ def mapper_label(
         return "METISMapper"
     if mapper_name in {"darts", "darts_extended"}:
         cfg = darts_config or (
-            DARTSConfig(extended_frontier=True, extended_batch=True, extended_batch_cap=4)
+            DARTSConfig(extended_batch_cap=4)
             if mapper_name == "darts_extended"
             else DARTSConfig()
         )
@@ -218,8 +237,13 @@ def make_darts_mapper(cfg: "DARTSConfig") -> "fastsim.DARTSMapper":
     mapper.extended_batch_emission_enabled = cfg.extended_batch
     mapper.extended_batch_emission_cap = cfg.extended_batch_cap
     mapper.intra_window_coordination = cfg.intra_window_coordination
+    mapper.push_pipeline_depth = cfg.push_pipeline_depth
+    mapper.simulate_memory = cfg.simulate_memory
     mapper.cascade_passes = cfg.cascade_passes
     mapper.finish_time_aware = cfg.finish_time_aware
+    mapper.global_eft_batch = cfg.global_eft_batch
+    mapper.global_eft_batch_cap = cfg.global_eft_batch_cap
+    mapper.single_device_per_trigger = cfg.single_device_per_trigger
     mapper.pipeline_depth = cfg.pipeline_depth
     mapper.starvation_threshold = cfg.starvation_threshold
     mapper.max_in_flight = cfg.max_in_flight
@@ -256,13 +280,11 @@ def make_internal_mapper(
     if mapper_name in {"darts", "darts_extended"}:
         if darts_config is not None:
             return make_darts_mapper(darts_config)
-        # darts: base frontier, no batch emission (classic)
-        # darts_extended: extended frontier + batch emission cap=2 (sweet spot from sweep)
+        # darts: threshold mode (mt=0), extended batch cap=2 — best from axis-1 sweep
+        # darts_extended: more aggressive batch emission cap=4
         if mapper_name == "darts":
             return make_darts_mapper(DARTSConfig())
-        return make_darts_mapper(
-            DARTSConfig(extended_frontier=True, extended_batch=True, extended_batch_cap=2)
-        )
+        return make_darts_mapper(DARTSConfig(extended_batch_cap=4))
     raise ValueError(f"Unsupported internal mapper '{name}'")
 
 
@@ -321,7 +343,7 @@ def make_transition_conditions(
         if mapper_name.lower() in {"darts", "darts_extended"}:
             kind = "device_threshold"
         else:
-            kind = "batch"
+            kind = "hysteresis"
 
     if kind == "default":
         return fastsim.DefaultTransitionConditions()
