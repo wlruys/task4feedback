@@ -66,7 +66,7 @@ protected:
         return ExecutionState::EXTERNAL_MAPPING;
       } else {
         SPDLOG_DEBUG("Time: {} Running C++ mapper", event.time);
-        scheduler.map_tasks(event, event_manager, mapper.get());
+        scheduler.map_tasks(event, event_manager, mapper.get(), true);
         return ExecutionState::RUNNING;
       }
     } else {
@@ -393,11 +393,7 @@ public:
     const auto &dm = scheduler.get_state().get_device_manager();
     mem_t overall_max = 0;
     for (devid_t i = 1; i < dm.n_devices; ++i) {
-      const auto &tracker = dm.launched.mem_tracker[i];
-      if (!tracker.empty()) {
-        mem_t device_max = *std::max_element(tracker.resources.begin(), tracker.resources.end());
-        overall_max = std::max(overall_max, device_max);
-      }
+      overall_max = std::max(overall_max, dm.launched.get_mem_peak(i));
     }
     return overall_max;
   }

@@ -22,6 +22,8 @@ option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
 option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
 option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" OFF)
 option(ENABLE_PARMETIS "Enable ParMETIS, everything needs to be installed in ~/local" OFF)
+option(ENABLE_KAHYPAR "Enable KaHyPar, everything needs to be installed in ~/local" OFF)
+option(ENABLE_METIS "Enable METIS, everything needs to be installed in ~/local" OFF)
 
 
 if(ENABLE_CCACHE)
@@ -195,6 +197,12 @@ endif()
 
 add_subdirectory(src/backend)      # builds simulator library
 add_subdirectory(src/bindings)     # builds python module 
+
+option(BUILD_TESTING "Build tests" OFF)
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(test)
+endif()
 
 include(CPack)                     #for packaging
 include(GNUInstallDirs)            #for install dirs

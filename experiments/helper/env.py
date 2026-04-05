@@ -56,8 +56,6 @@ def create_observer_factory(cfg: DictConfig):
             width=width,
             length=length,
             prev_frames=cfg.feature.observer.prev_frames,
-            grid_override=use_grid_observer,
-            graph_override=use_grid_observer,
         )
     else:
         graph_spec.max_candidates = cfg.feature.observer.get("n_candidates", 1)

@@ -8,6 +8,20 @@ namespace nb = nanobind;
 using namespace nb::literals;
 
 void init_mapper_ext(nb::module_ &m) {
+  nb::enum_<MemoryAwareLocationState>(m, "MemoryAwareLocationState")
+      .value("LAUNCHED", MemoryAwareLocationState::LAUNCHED)
+      .value("RESERVED", MemoryAwareLocationState::RESERVED)
+      .value("MAPPED", MemoryAwareLocationState::MAPPED);
+
+  nb::enum_<MemoryAwareOverflowState>(m, "MemoryAwareOverflowState")
+      .value("RESERVED", MemoryAwareOverflowState::RESERVED)
+      .value("MAPPED", MemoryAwareOverflowState::MAPPED)
+      .value("LAUNCHED", MemoryAwareOverflowState::LAUNCHED);
+
+  nb::enum_<MemoryAwareOverflowMode>(m, "MemoryAwareOverflowMode")
+      .value("FULL_SPILL", MemoryAwareOverflowMode::FULL_SPILL)
+      .value("INCOMING_ONLY", MemoryAwareOverflowMode::INCOMING_ONLY);
+
   nb::bind_vector<std::vector<Action>>(m, "ActionVector");
   nb::class_<Action>(m, "Action")
       .def(nb::init<std::size_t, devid_t, priority_t, priority_t>())
@@ -73,17 +87,20 @@ void init_mapper_ext(nb::module_ &m) {
       .def("time_for_transfer", &EFTMapper::time_for_transfer, "task_id"_a, "device_id"_a,
            "state"_a);
 
-  nb::class_<MemoryAwareEFTMapper, EFTMapper>(m, "MemoryAwareEFTMapper")
-      .def(nb::init<>())
-      .def(nb::init<std::size_t, std::size_t, double>(), "num_tasks"_a, "num_devices"_a,
-           "alpha"_a = 1.0)
-      .def(nb::init<MemoryAwareEFTMapper &>(), "other"_a)
-      .def_rw("alpha", &MemoryAwareEFTMapper::alpha);
-
   nb::class_<DequeueEFTMapper, EFTMapper>(m, "DequeueEFTMapper")
       .def(nb::init<>())
       .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
       .def(nb::init<DequeueEFTMapper &>(), "other"_a);
+
+  nb::class_<MemoryAwareEFTMapper, DequeueEFTMapper>(m, "MemoryAwareEFTMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t, double>(), "num_tasks"_a, "num_devices"_a,
+           "alpha"_a = 1.0)
+      .def(nb::init<MemoryAwareEFTMapper &>(), "other"_a)
+      .def_rw("alpha", &MemoryAwareEFTMapper::alpha)
+      .def_rw("eviction_cost_location_state", &MemoryAwareEFTMapper::eviction_cost_location_state)
+      .def_rw("overflow_state", &MemoryAwareEFTMapper::overflow_state)
+      .def_rw("overflow_mode", &MemoryAwareEFTMapper::overflow_mode);
 
   nb::class_<DataAwareMapper, Mapper>(m, "DataAwareMapper")
       .def(nb::init<>())
@@ -137,6 +154,12 @@ void init_mapper_ext(nb::module_ &m) {
       .def_prop_rw("extended_batch_emission_cap", &DARTSMapper::get_extended_batch_emission_cap,
                    &DARTSMapper::set_extended_batch_emission_cap)
       .def_rw("trace_decisions", &DARTSMapper::trace_decisions)
+      .def_rw("intra_window_coordination", &DARTSMapper::intra_window_coordination)
+      .def_rw("cascade_passes", &DARTSMapper::cascade_passes)
+      .def_rw("finish_time_aware", &DARTSMapper::finish_time_aware)
+      .def_rw("pipeline_depth", &DARTSMapper::pipeline_depth)
+      .def_rw("starvation_threshold", &DARTSMapper::starvation_threshold)
+      .def_rw("max_in_flight", &DARTSMapper::max_in_flight)
       .def("set_thresholds", &DARTSMapper::set_thresholds, "mapped_threshold"_a,
            "reserved_threshold"_a)
       .def("use_mapped_threshold", &DARTSMapper::use_mapped_threshold, "mapped_threshold"_a)

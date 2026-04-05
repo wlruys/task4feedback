@@ -1063,21 +1063,60 @@ class SchedulerState:
 
     def get_tasks(self) -> StaticTaskInfo: ...
 
-class HysteresisTransitionConditions:
+class MemoryAwareLocationState(enum.IntEnum):
+    LAUNCHED = 0
+    RESERVED = 1
+    MAPPED = 2
+
+class MemoryAwareOverflowState(enum.IntEnum):
+    RESERVED = 0
+    MAPPED = 1
+    LAUNCHED = 2
+
+class MemoryAwareOverflowMode(enum.IntEnum):
+    FULL_SPILL = 0
+    INCOMING_ONLY = 1
+
+class TransitionConditions:
+    def should_map(self, state: SchedulerState, queues: ...) -> bool: ...
+    def should_reserve(self, state: SchedulerState, queues: ...) -> bool: ...
+    def should_launch(self, state: SchedulerState, queues: ...) -> bool: ...
+
+class DefaultTransitionConditions(TransitionConditions):
+    def __init__(self) -> None: ...
+
+class RangeTransitionConditions(TransitionConditions):
+    def __init__(self, mapped_reserved_gap: int, reserved_launched_gap: int, total_in_flight: int) -> None: ...
+
+    mapped_reserved_gap: int
+    reserved_launched_gap: int
+    total_in_flight: int
+
+class BatchTransitionConditions(TransitionConditions):
+    def __init__(self, batch_size: int, queue_threshold: int, max_in_flight: int) -> None: ...
+
+    batch_size: int
+    queue_threshold: int
+    max_in_flight: int
+
+    @property
+    def last_accessed(self) -> int: ...
+
+    @property
+    def active_batch(self) -> int: ...
+
+class HysteresisTransitionConditions(TransitionConditions):
     @overload
     def __init__(self) -> None: ...
 
     @overload
     def __init__(self, open_in_flight: int, close_in_flight: int, starvation_threshold: int) -> None: ...
 
-    @property
-    def open_in_flight(self) -> int: ...
+    open_in_flight: int
 
-    @property
-    def close_in_flight(self) -> int: ...
+    close_in_flight: int
 
-    @property
-    def starvation_threshold(self) -> int: ...
+    starvation_threshold: int
 
     @property
     def last_window_opened(self) -> int: ...
@@ -1085,7 +1124,7 @@ class HysteresisTransitionConditions:
     @property
     def window_open(self) -> bool: ...
 
-class DeviceThresholdTransitionConditions:
+class DeviceThresholdTransitionConditions(TransitionConditions):
     @overload
     def __init__(self) -> None: ...
 
@@ -1095,8 +1134,41 @@ class DeviceThresholdTransitionConditions:
     @property
     def mapped_threshold(self) -> int: ...
 
+    @mapped_threshold.setter
+    def mapped_threshold(self, arg: int, /) -> None: ...
+
     @property
     def reserved_threshold(self) -> int: ...
+
+    @reserved_threshold.setter
+    def reserved_threshold(self, arg: int, /) -> None: ...
+
+    def set_thresholds(self, mapped_threshold: int, reserved_threshold: int) -> None: ...
+    def use_mapped_threshold(self, mapped_threshold: int) -> None: ...
+    def use_reserved_threshold(self, reserved_threshold: int) -> None: ...
+    def disable_thresholds(self) -> None: ...
+
+class DARTSAdaptiveTransitionConditions(TransitionConditions):
+    @overload
+    def __init__(self) -> None: ...
+
+    @overload
+    def __init__(self, reserved_threshold: int, max_mapped: int, starvation_threshold: int = 1) -> None: ...
+
+    reserved_threshold: int
+    max_mapped: int
+    starvation_threshold: int
+
+class DARTSPipelineTransitionConditions(TransitionConditions):
+    @overload
+    def __init__(self) -> None: ...
+
+    @overload
+    def __init__(self, pipeline_depth: int, max_in_flight: int, starvation_threshold: int = 1) -> None: ...
+
+    pipeline_depth: int
+    max_in_flight: int
+    starvation_threshold: int
 
 class ActionVector:
     @overload
@@ -1256,18 +1328,6 @@ class EFTMapper(Mapper):
 
     def time_for_transfer(self, task_id: int, device_id: int, state: SchedulerState) -> int: ...
 
-class MemoryAwareEFTMapper(EFTMapper):
-    alpha: float
-
-    @overload
-    def __init__(self) -> None: ...
-
-    @overload
-    def __init__(self, num_tasks: int, num_devices: int, alpha: float = ...) -> None: ...
-
-    @overload
-    def __init__(self, other: MemoryAwareEFTMapper) -> None: ...
-
 class DequeueEFTMapper(EFTMapper):
     @overload
     def __init__(self) -> None: ...
@@ -1277,6 +1337,21 @@ class DequeueEFTMapper(EFTMapper):
 
     @overload
     def __init__(self, other: DequeueEFTMapper) -> None: ...
+
+class MemoryAwareEFTMapper(DequeueEFTMapper):
+    alpha: float
+    eviction_cost_location_state: MemoryAwareLocationState
+    overflow_state: MemoryAwareOverflowState
+    overflow_mode: MemoryAwareOverflowMode
+
+    @overload
+    def __init__(self) -> None: ...
+
+    @overload
+    def __init__(self, num_tasks: int, num_devices: int, alpha: float = ...) -> None: ...
+
+    @overload
+    def __init__(self, other: MemoryAwareEFTMapper) -> None: ...
 
 class DataAwareMapper(Mapper):
     @overload
@@ -1329,6 +1404,28 @@ class DARTSMapper(Mapper):
 
     @reserved_threshold.setter
     def reserved_threshold(self, arg: int, /) -> None: ...
+
+    extended_frontier_enabled: bool
+    extended_batch_emission_enabled: bool
+
+    @property
+    def extended_batch_emission_cap(self) -> int: ...
+
+    @extended_batch_emission_cap.setter
+    def extended_batch_emission_cap(self, arg: int, /) -> None: ...
+
+    trace_decisions: bool
+    intra_window_coordination: bool
+    cascade_passes: int
+    finish_time_aware: bool
+    pipeline_depth: int
+    starvation_threshold: int
+    max_in_flight: int
+
+    def set_thresholds(self, mapped_threshold: int, reserved_threshold: int) -> None: ...
+    def use_mapped_threshold(self, mapped_threshold: int) -> None: ...
+    def use_reserved_threshold(self, reserved_threshold: int) -> None: ...
+    def disable_thresholds(self) -> None: ...
 
 class IFeatureVector:
     @overload

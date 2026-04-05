@@ -63,6 +63,7 @@ public:
 
   void deactivate(uint32_t index) noexcept { viable_mask &= ~(1ULL << index); }
   void deactivate() noexcept { viable_mask &= ~(1ULL << active_index); }
+  void deactivate_mask(uint64_t mask) noexcept { viable_mask &= ~mask; }
   void activate(std::size_t index) noexcept { viable_mask |= (1ULL << index); }
   void activate() noexcept { viable_mask |= (1ULL << active_index); }
 

@@ -7,7 +7,7 @@ import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 from dataclasses import dataclass
-from typing import Optional, Literal 
+from typing import Optional, Literal
 from .base import Cell, Edge
 from ..base import DataBlocks, DataKey
 from collections import defaultdict
@@ -23,13 +23,13 @@ import os
 from pathlib import Path
 
 OKABE_ITO_COLORS = [
-    "#56B4E9",  
-    "#E69F00",  
-    "#009E73",  
+    "#56B4E9",
+    "#E69F00",
+    "#009E73",
     "#0072B2",
-    "#CC79A7",    
-    "#D55E00",  
-    "#F0E442",  
+    "#CC79A7",
+    "#D55E00",
+    "#F0E442",
     "#000000",
 ]
 
@@ -49,18 +49,18 @@ def _auto_text_color(rgb: np.ndarray) -> np.ndarray:
 @dataclass(slots=True)
 class ColorConfig:
     # Device partition colors
-    device_colors: Optional[list[str]] = field(default_factory=lambda: OKABE_ITO_COLORS.copy())         
-    device_cmap: str | mcolors.Colormap = "tab20"     
-    unknown_color: str = "#8a8a8a"                     
-    running_color: str = "#808080"                     
+    device_colors: Optional[list[str]] = field(default_factory=lambda: OKABE_ITO_COLORS.copy())
+    device_cmap: str | mcolors.Colormap = "tab20"
+    unknown_color: str = "#8a8a8a"
+    running_color: str = "#808080"
 
     # Duration shading
-    duration_cmap: str | mcolors.Colormap = "viridis" 
+    duration_cmap: str | mcolors.Colormap = "viridis"
     duration_mode: Literal["overlay", "to_white", "duration_only"] = "to_white"
-    duration_gamma: float = 0.4              
-    duration_alpha: float = 0.65                       
-    duration_percentile_max: float = 0.98             
-    ema_tau_frames: int = 5    
+    duration_gamma: float = 0.4
+    duration_alpha: float = 0.65
+    duration_percentile_max: float = 0.98
+    ema_tau_frames: int = 5
 
 @dataclass(slots=True)
 class PlotConfig:
@@ -68,8 +68,8 @@ class PlotConfig:
     use_labels: bool = False
     use_blit: bool = False
     use_duration_shading: bool = True
-    dpi: int = 300 
-    bitrate: int = 300 
+    dpi: int = 300
+    bitrate: int = 300
     figsize: tuple[float, float] = (8.0, 8.0)
     video_seconds: int = 30
     n_frames: int = 100
@@ -91,7 +91,7 @@ class PercentileEMANormalizer:
         else:
             self._vmax += (m - self._vmax) / max(self.tau, 1)
             self._vmax = max(self._vmax, self.eps)
-        return self._vmax                
+        return self._vmax
 
 def _get_cmap(name_or_obj) -> mcolors.Colormap:
     return name_or_obj if isinstance(name_or_obj, mcolors.Colormap) else cm.get_cmap(name_or_obj)
@@ -125,18 +125,18 @@ class EnvStaticState:
     dt_virtual: np.ndarray
     dt_block: np.ndarray
     dt_duration_us: np.ndarray
-    dt_launch_time: np.ndarray 
+    dt_launch_time: np.ndarray
     dt_complete_time: np.ndarray
 
 @dataclass(slots=True)
 class EnvDynamicState:
-    ct_state: np.ndarray       
+    ct_state: np.ndarray
     dt_state: np.ndarray
-    partition: np.ndarray 
+    partition: np.ndarray
     last_duration: np.ndarray
     last_label: list[str]
-    ct_running: np.ndarray 
-    ct_changed: np.ndarray 
+    ct_running: np.ndarray
+    ct_changed: np.ndarray
     time: int
     last_time: int
     last_cell_update: np.ndarray
@@ -209,7 +209,7 @@ class LoadBalanceResult:
     total_out_communication: float
 
 def compute_load_balance(static_state: EnvStaticState, start_time: Optional[int] = None, end_time: Optional[int] = None) -> LoadBalanceResult:
-    
+
     if start_time is None:
         start_time = 0
     if end_time is None:
@@ -230,7 +230,7 @@ def compute_load_balance(static_state: EnvStaticState, start_time: Optional[int]
             total_in_communication=0.0,
             total_out_communication=0.0,
         )
-    
+
     work = np.zeros((n_devices,), dtype=np.float64)
     in_comm = np.zeros((n_devices,), dtype=np.float64)
     out_comm = np.zeros((n_devices,), dtype=np.float64)
@@ -239,7 +239,7 @@ def compute_load_balance(static_state: EnvStaticState, start_time: Optional[int]
         in_comm[device] = get_instantaneous_in_communication(static_state, device, start_time, end_time)
         out_comm[device] = get_instantaneous_out_communication(static_state, device, start_time, end_time)
 
-    
+
 
     avg_work = float(np.sum(work))/n_compute_devices if np.any(work) else 0.0
     avg_in_comm = float(np.sum(in_comm))/n_data_devices if np.any(in_comm) else 0.0
@@ -305,7 +305,7 @@ class IdleType:
     compute: bool = True
     in_comm: bool = True
     out_comm: bool = True
-    
+
 
 
 def get_total_idle_time(static_state: EnvStaticState, idle_type: Optional[IdleType]=None, simulation_end_time: Optional[int] = None) -> np.ndarray:
@@ -324,10 +324,10 @@ def get_total_idle_time(static_state: EnvStaticState, idle_type: Optional[IdleTy
                 if device >= 0 and not is_virtual and launch >= 0 and finish > launch:
                     intervals[device].append((int(launch), int(finish)))
         return intervals
-    
+
     if idle_type is None:
         idle_type = IdleType(compute=True, in_comm=True, out_comm=True)
-    
+
     compute_devices = set(static_state.ct_device[static_state.ct_device >= 0])
     data_devices = set(static_state.dt_device[static_state.dt_device >= 0]) | set(static_state.dt_source[static_state.dt_source >= 0])
     n_devices = max(compute_devices | data_devices) + 1 if (compute_devices | data_devices) else 0
@@ -420,7 +420,7 @@ def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
         dt_virtual=dt_virtual,
         dt_launch_time=dt_launch_time,
         dt_complete_time=dt_complete_time,
-        dt_block=dt_block,    
+        dt_block=dt_block,
         dt_duration_us=dt_duration_us)
 
     geom = env.get_graph().data.geometry
@@ -494,7 +494,7 @@ def _update_initial_partition(env, current_time: int, static_state: EnvStaticSta
 
     if len(cell_locations) != len(dynamic_state.partition):
         raise ValueError(f"Cell locations length {len(cell_locations)} does not match partition length {len(dynamic_state.partition)}")
-    
+
     dynamic_state.partition[:] = cell_locations
 
     dynamic_state.last_duration.fill(0.0)
@@ -537,13 +537,13 @@ def _update_dynamic_paritition(env, current_time: int,
             (dy.ct_state == fastsim.TaskState.LAUNCHED)
         )
     )[0]
-    
+
     if changed_idx.size == 0:
         return dy.ct_running, dy.partition, dy.last_duration, dy.last_label, np.empty((0,), dtype=np.int64)
 
     launch_time = static_state.ct_launch_time[changed_idx]
     completed_time = static_state.ct_complete_time[changed_idx]
-    
+
     valid_completed_mask = completed_time <= current_time
     valid_launched_mask = launch_time <= current_time
 
@@ -686,7 +686,7 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
     fig, ax = _create_axes(geom, _figsize=(8,8), pad=0.05)
 
     points = geom.cell_points
-    cells = geom.cells 
+    cells = geom.cells
     edges = geom.edges
     polys =  points[cells]
 
@@ -695,11 +695,11 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
     line_width = np.zeros((len(edges),), dtype=np.float32)
 
     part_index = (dynamic_state.partition.astype(np.int64) + 1).clip(0, device_palette_rgba.shape[0]-1)
-    base_colors = device_palette_rgba[part_index]                 
+    base_colors = device_palette_rgba[part_index]
     face_colors[:] = base_colors
     edge_colors[:] = mcolors.to_rgba("black")
     line_width[:] = 3.0
-    
+
     interior_polys = PolyCollection(
         polys, facecolors=face_colors, edgecolors=edge_colors, linewidths=line_width, zorder=9, alpha=1, antialiased=False,
     )
@@ -722,7 +722,7 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
     shade_lw = interior_polys.get_linewidths()
 
     fps = max(1, round(n_frames / max(1, video_seconds)))
-    
+
 
     T = int(env.simulator.time)
     if n_frames <= 1:
@@ -732,7 +732,7 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
         time_list[-1] = T
     time_interval = int(env.simulator.time / n_frames)
 
-    background = None 
+    background = None
 
     def frame_builder(frame):
         time = time_list[frame]
@@ -761,33 +761,33 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
         if plot_cfg.use_labels and label_artists is not None:
             return tuple([interior_polys, *label_artists.tolist()])
         return (interior_polys,)
-    
+
     max_duration = 100
 
     def _update(frame):
-        nonlocal background 
+        nonlocal background
         nonlocal shade_fc
         nonlocal max_duration
 
         ct_running, partition, last_duration, last_label, changed_cells = frame_builder(frame)
 
         part_index = (partition.astype(np.int64) + 1).clip(0, device_palette_rgba.shape[0]-1)
-        base_colors = device_palette_rgba[part_index]                 
-        shade_fc[:] = base_colors                                      
+        base_colors = device_palette_rgba[part_index]
+        shade_fc[:] = base_colors
 
         if plot_cfg.use_duration_shading:
             vmax = dur_norm.update_and_get(last_duration)
             norm = np.clip((last_duration / vmax), 0.0, 1.0)
             norm = norm[:, None]
-            
+
             norm[last_duration <= 0.0] = 1.0
 
             if frame<=1:
                 shade_fc[:, :3] = base_colors[:, :3]
             else:
                 if color_cfg.duration_mode == "overlay":
-                    dur_colors = duration_cmap(norm.squeeze()).astype(np.float32)  
-                    a = (color_cfg.duration_alpha * norm).astype(np.float32)       
+                    dur_colors = duration_cmap(norm.squeeze()).astype(np.float32)
+                    a = (color_cfg.duration_alpha * norm).astype(np.float32)
                     shade_fc[:, :3] = (1.0 - a) * shade_fc[:, :3] + a * dur_colors[:, :3]
                 elif color_cfg.duration_mode == "to_white":
                     WHITE = np.array([1, 1, 1], dtype=np.float32)
@@ -822,17 +822,17 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
         return tuple(artists)
 
     ani = animation.FuncAnimation(
-        fig, _update, init_func=_init, 
-        frames=n_frames, 
-        interval=time_interval, 
+        fig, _update, init_func=_init,
+        frames=n_frames,
+        interval=time_interval,
         blit=bool(plot_cfg.use_blit),
-        repeat=False, 
+        repeat=False,
         cache_frame_data=False,
     )
 
-    ani._fig_ref = fig 
+    ani._fig_ref = fig
     ani._nframes = n_frames
-    ani._fps = fps 
+    ani._fps = fps
     ani._disconnect_resize = lambda: fig.canvas.mpl_disconnect(cid_resize)
 
     _save_animation(ani, path=path, dpi=plot_cfg.dpi, bitrate=plot_cfg.bitrate)

@@ -24,7 +24,11 @@ target_sources(backend
         include/noise.hpp
         include/queues.hpp
         include/resources.hpp
+        include/eviction_policy.hpp
+        include/mappers.hpp
         include/scheduler.hpp
+        include/scheduler_state.hpp
+        include/transition_conditions.hpp
         include/settings.hpp
         include/simulator.hpp
         include/stats.hpp

@@ -25,6 +25,7 @@ from .wrappers import (
     RangeTransitionConditions,
     DefaultTransitionConditions,
     DeviceThresholdTransitionConditions,
+    HysteresisTransitionConditions,
     uniform_connected_devices,
     start_logger,
     SchedulerState,

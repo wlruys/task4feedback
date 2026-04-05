@@ -126,12 +126,12 @@ size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
   }
 
   auto &mappable = queues.mappable;
-  auto top_k_tasks = mappable.get_top_k();
+  const auto &top_k_tasks = mappable.top_k_view();
 
   const auto copy_size = std::min(v.size(), top_k_tasks.size());
 
-  for (size_t i = 0; i < copy_size; i++) {
-    v[i] = top_k_tasks[i];
+  for (std::size_t i = 0; i < copy_size; ++i) {
+    v[i] = static_cast<int64_t>(element_value(top_k_tasks[i]));
   }
   return copy_size;
 }
@@ -242,14 +242,30 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
   auto &s = this->state;
   auto &scheduler_conditions = conditions.get();
   const auto current_time = s.global_time;
+  auto &mappable = queues.mappable;
+  const auto &top_k_tasks = mappable.top_k_view();
+
+  newly_mappable_buffer.clear();
 
   if (!action_list.empty()) {
-    auto candidates = collect_candidates();
-    apply_mapped_actions(candidates, action_list);
+    for (auto &action : action_list) {
+      const auto task_id = static_cast<taskid_t>(element_value(top_k_tasks[action.pos]));
+      map_task(task_id, action);
+
+      newly_mappable_buffer.insert(newly_mappable_buffer.end(), compute_task_buffer.begin(),
+                                   compute_task_buffer.end());
+    }
+    remove_mapped_tasks(action_list);
     SPDLOG_DEBUG("Time:{} Newly mappable tasks: {}", current_time, newly_mappable_buffer.size());
+    push_mappable(newly_mappable_buffer);
   }
 
-  if (queues.has_mappable() && scheduler_conditions.should_map(s, queues)) {
+  bool can_continue_mapping = false;
+  if (queues.has_mappable()) {
+    can_continue_mapping = action_list.empty() ? scheduler_conditions.should_map(s, queues)
+                                               : scheduler_conditions.update_map(s, queues);
+  }
+  if (can_continue_mapping) {
     return ExecutionState::EXTERNAL_MAPPING;
   } else {
     if (has_pending_step_breakpoint()) {
@@ -279,7 +295,8 @@ void Scheduler::skip_reserve_tasks(ReserverEvent &reserve_event, EventManager &e
   event_manager.create_event(EventType::LAUNCHER, launcher_time);
 }
 
-void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper) {
+void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper,
+                          bool prechecked) {
   ZoneScoped;
 
   success_count = 0;
@@ -291,8 +308,12 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
   SPDLOG_DEBUG("Time:{} Starting mapper", current_time);
   SPDLOG_DEBUG("Time:{} Mappable Queue Size: {}", current_time, mappable.size());
   bool break_flag = false;
+  auto check_can_map = [&]() {
+    return queues.has_mappable() && scheduler_conditions.should_map(s, queues);
+  };
+  bool can_map = prechecked ? queues.has_mappable() : check_can_map();
 
-  while (queues.has_mappable() && scheduler_conditions.should_map(s, queues)) {
+  while (can_map) {
 
     if (has_pending_step_breakpoint()) {
       break_flag = true;
@@ -309,6 +330,7 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
       break;
     }
     apply_mapped_actions(candidates, actions);
+    can_map = check_can_map();
   }
 
   if (break_flag) {
@@ -457,17 +479,12 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
 
     // Keep devices that already triggered eviction blocked for this reserve pass.
     // push_reservable() can reactivate queues via push_priority_at(), so re-apply.
-    auto blocked = eviction_blocked_mask;
-    while (blocked) {
-      const auto blocked_device = static_cast<uint32_t>(std::countr_zero(blocked));
-      reservable.deactivate(blocked_device);
-      blocked &= (blocked - 1);
-    }
+    reservable.deactivate_mask(eviction_blocked_mask);
 
     // Cycle to the next active device queue
     reservable.next_drainable();
   }
-  for (std::size_t i = 0; i < tasks_requesting_eviction.size(); ++i) {
+  T4F_DEBUG_ONLY(for (std::size_t i = 0; i < tasks_requesting_eviction.size(); ++i) {
     const auto [task_i, device_i] = tasks_requesting_eviction[i];
     T4F_INVARIANT(task_runtime.is_compute_reservable(task_i));
     T4F_INVARIANT(task_runtime.get_compute_task_mapped_device(task_i) == device_i);
@@ -476,7 +493,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
       T4F_INVARIANT(!(task_i == task_j && device_i == device_j) &&
                     "Duplicate entries in tasks_requesting_eviction");
     }
-  }
+  });
 
   if (break_flag) [[unlikely]] {
     timecount_t reserver_time = current_time;

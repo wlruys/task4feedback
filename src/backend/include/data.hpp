@@ -345,7 +345,7 @@ protected:
 public:
   MovementManager() = default;
 
-  bool is_moving(dataid_t data_id, devid_t destination) const {
+  [[nodiscard]] bool is_moving(dataid_t data_id, devid_t destination) const {
     return movement_times.find(pack_movement_key(data_id, destination)) != movement_times.end();
   }
 
@@ -364,13 +364,18 @@ public:
     return true;
   }
 
-  inline void set_completion(dataid_t data_id, devid_t destination,
-                             timecount_t global_completion_time) {
-    movement_times[pack_movement_key(data_id, destination)] = global_completion_time;
+  [[nodiscard]] inline bool try_set_completion(dataid_t data_id, devid_t destination,
+                                               timecount_t global_completion_time) {
+    auto [it, inserted] =
+        movement_times.emplace(pack_movement_key(data_id, destination), global_completion_time);
+    if (!inserted) {
+      it->second = global_completion_time;
+    }
+    return inserted;
   }
 
-  inline void remove(dataid_t data_id, devid_t destination) {
-    movement_times.erase(pack_movement_key(data_id, destination));
+  [[nodiscard]] inline bool remove(dataid_t data_id, devid_t destination) {
+    return movement_times.erase(pack_movement_key(data_id, destination)) > 0;
   }
 };
 
@@ -458,8 +463,10 @@ private:
       }
       nodes[new_n - 1].next = kNull;
 
-      SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
-                  old_user_items, new_user_items);
+      #ifndef NDEBUG
+        SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
+            old_user_items, new_user_items);
+      #endif
       return true;
     }
 
@@ -643,6 +650,43 @@ private:
         cur = nodes[cur].prev;
       }
     }
+
+    static DeviceLRU clone_with_headroom(const DeviceLRU &src, std::size_t min_items = 0) {
+      DeviceLRU dst;
+      const std::size_t active_items = src.where.size();
+      std::size_t target_items = active_items;
+
+      if (active_items != 0) {
+        const std::size_t src_user_capacity = src.nodes.size() > 0 ? src.nodes.size() - 1 : 0;
+        const std::size_t active_half = active_items / 2;
+        const std::size_t retained_slack_half =
+            src_user_capacity > active_items
+                ? std::min((src_user_capacity - active_items) / 2, active_items)
+                : 0;
+        const std::size_t headroom = std::max<std::size_t>({64, active_half, retained_slack_half});
+
+        target_items = active_items + headroom;
+      }
+
+      target_items = std::max(target_items, min_items);
+      target_items = std::max(target_items, active_items);
+
+      if (src.hard_max_items != 0) {
+        target_items = std::min(target_items, src.hard_max_items);
+      }
+
+      dst.init(target_items, src.capacity_bytes, target_items, src.hard_max_items);
+
+      node_t cur = src.nodes[0].prev; // LRU -> MRU so insert preserves order
+      while (cur != 0) {
+        const auto result = dst.insert_or_update(src.nodes[cur].id, src.nodes[cur].bytes);
+        T4F_INVARIANT(result != InsertResult::Failed);
+        cur = src.nodes[cur].prev;
+      }
+
+      dst.used_bytes = src.used_bytes;
+      return dst;
+    }
   };
 
   std::vector<DeviceLRU> lrus_;
@@ -694,9 +738,11 @@ public:
   }
 
   LRU_manager(const LRU_manager &other)
-      : evicted_size(other.evicted_size),
-        max_usage(other.max_usage),
-        lrus_(other.lrus_) {
+      : evicted_size(other.evicted_size), max_usage(other.max_usage), lrus_(other.lrus_.size()) {
+    constexpr std::size_t kMinCloneItems = 4096;
+    for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
+      lrus_[dev] = DeviceLRU::clone_with_headroom(other.lrus_[dev], kMinCloneItems);
+    }
     id_buffer.reserve(other.id_buffer.capacity());
   }
 
@@ -1279,7 +1325,7 @@ public:
                           std::span<const dataid_t> list, devid_t device_id,
                           timecount_t current_time) {
     for (auto data_id : list) {
-      read_update(data_id, device_id, mapped_locations, current_time);
+      const bool changed = read_update(data_id, device_id, mapped_locations, current_time);
       T4F_INVARIANT(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task request in mapper
@@ -1482,7 +1528,7 @@ public:
                    destination);
     }
 
-    movement_manager.set_completion(data_id, destination, current_time + duration);
+    (void)movement_manager.try_set_completion(data_id, destination, current_time + duration);
     T4F_INVARIANT(movement_manager.is_moving(data_id, destination));
 
     comm_manager.reserve_connection(source, destination);
@@ -1522,7 +1568,7 @@ public:
     T4F_INVARIANT(movement_manager.is_moving(data_id, destination));
     T4F_INVARIANT(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
-    movement_manager.remove(data_id, destination);
+    (void)movement_manager.remove(data_id, destination);
     T4F_INVARIANT(!movement_manager.is_moving(data_id, destination));
     T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
 
@@ -1561,7 +1607,7 @@ public:
     launched_locations.set_valid(data_id, destination, current_time);
     reserved_locations.set_valid(data_id, destination, current_time);
     mapped_locations.set_valid(data_id, destination, current_time);
-    movement_manager.remove(data_id, destination);
+    (void)movement_manager.remove(data_id, destination);
     T4F_INVARIANT(!movement_manager.is_moving(data_id, destination));
     T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
     T4F_INVARIANT(reserved_locations.is_valid(data_id, destination));

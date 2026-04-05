@@ -29,6 +29,7 @@ from task4feedback.fastsim2 import (
     DefaultTransitionConditions,
     BatchTransitionConditions,
     DeviceThresholdTransitionConditions,
+    HysteresisTransitionConditions,
     SchedulerState,
     Simulator,
     ExecutionState,
