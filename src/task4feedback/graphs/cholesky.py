@@ -491,6 +491,7 @@ class CholeskyGraph(ComputeDataGraph):
         min_loc: int = 0,
         max_loc: Optional[int] = None,
         verbose: bool = False,
+        step: Optional[int] = None,
     ):
         n_lower_triangular_cells = self.config.n * (self.config.n + 1) // 2
         num_changes = int(perc_change * n_lower_triangular_cells)

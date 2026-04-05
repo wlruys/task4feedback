@@ -55,6 +55,8 @@ class JacobiConfig(GraphConfig):
     compute_time: int | None = None
     vcu_usage: float = 1.0
     task_internal_memory: int = 0
+    morton_priority_enabled: bool = True
+    use_random_priority: bool = False
     bytes_per_element: int = 4  # Assuming float32 data type
     verbose: bool = True
     boundary_in_memory_calc: bool = True
@@ -493,6 +495,13 @@ class JacobiGraph(ComputeDataGraph):
             self.apply_variant(JacobiVariant)
 
         self.finalize()
+
+    def finalize(self):
+        super().finalize()
+        if self.static_graph is not None:
+            self.static_graph.set_grid_shape(self.ny, self.nx)
+            self.static_graph.set_morton_priority_enabled(self.config.morton_priority_enabled)
+            self.static_graph.set_use_random_priority(self.config.use_random_priority)
 
     def _apply_workload_variant(self, system: System):
         # print("Building custom variant for system", system)
@@ -1804,18 +1813,14 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         length: int,
         prev_frames: int,
         version: str,
-        batched: bool = False,
-        grid_override: bool = False,
         graph_override: bool = False,
+        **_ignored,
     ):
-        _ = grid_override
-        _ = graph_override
-        self.batched = batched
-        assert (not batched and spec.max_candidates == 1) or (
-            spec.max_candidates == width * length
-        ), (
-            f"Batched {self.batched} CNN observer requires max_candidates to be {width * length if self.batched else 1}, but got {spec.max_candidates}"
-        )
+        self.graph_override = graph_override
+        if self.graph_override and spec.max_candidates != width * length:
+            raise ValueError(
+                f"When graph_override is True, max_candidates must be {width * length}, but got {spec.max_candidates}"
+            )
         task_feature_factory = FeatureExtractorFactory()
 
         if "A" in version:
@@ -1949,7 +1954,7 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
             if self.data_device_feature_factory is not None
             else None
         )
-        if self.batched:
+        if self.graph_override:
             return CnnBatchTaskObserver(
                 simulator,
                 graph_spec,

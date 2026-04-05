@@ -368,17 +368,6 @@ public:
     auto &counts = state.counts;
     const auto n_mapped = counts.n_mapped();
     const bool starved = counts.any_non_host_mapped_below(starvation_threshold);
-    if (!window_open) {
-      return (n_mapped <= open_in_flight) || starved;
-    }
-    return !(n_mapped >= close_in_flight && !starved);
-  }
-
-  bool update_map(SchedulerState &state, SchedulerQueues &queues) override {
-    MONUnusedParameter(queues);
-    auto &counts = state.counts;
-    const auto n_mapped = counts.n_mapped();
-    const bool starved = counts.any_non_host_mapped_below(starvation_threshold);
     const bool open_condition = (n_mapped <= open_in_flight) || starved;
     const bool close_condition = (n_mapped >= close_in_flight) && !starved;
     if (!window_open && open_condition) {
@@ -387,6 +376,10 @@ public:
     } else if (window_open && close_condition) {
       window_open = false;
     }
+    return window_open || open_condition;
+  }
+
+  bool update_map(SchedulerState &state, SchedulerQueues &queues) override {
     return should_map(state, queues);
   }
 };

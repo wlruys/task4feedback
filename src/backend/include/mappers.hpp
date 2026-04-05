@@ -2815,7 +2815,8 @@ private:
 
     const auto &block = frontier_blocks[static_cast<std::size_t>(best_block_index)];
     const auto weighted_compute =
-        static_cast<long long>(4 * block.c1_compute + 2 * block.c2_compute + block.c3_compute);
+        static_cast<long long>(static_cast<__int128>(4) * block.c1_compute +
+                               static_cast<__int128>(2) * block.c2_compute + block.c3_compute);
     const auto weighted_count = 4 * block.s1_count + 2 * block.s2_count + block.s3_count;
     SPDLOG_DEBUG(
         "Time:{} DARTS device={} candidates={} block={} t={} c0={} s0={} s1={} r={} s2={} s3={} "
@@ -2982,10 +2983,12 @@ private:
 
 public:
   DeviceThresholdState thresholds;
-  bool extended_frontier_enabled = false;
-  bool extended_batch_emission_enabled = false;
+  // Sane defaults: extended frontier + batch emission cap=2 (best in sweep),
+  // legacy threshold mode with mapped_threshold=0 (map only to idle devices).
+  bool extended_frontier_enabled = true;
+  bool extended_batch_emission_enabled = true;
   bool trace_decisions = false;
-  int32_t extended_batch_emission_cap = 4;
+  int32_t extended_batch_emission_cap = 2;  // cap=2 outperformed cap=4 in sweeps
   bool intra_window_coordination = false;
   int32_t cascade_passes = 3;
   bool finish_time_aware = false;
@@ -2998,6 +3001,7 @@ public:
   //     (no cap enforcement in device selection).
   // Legacy threshold mode (active when pipeline_depth == 0):
   //   - Uses thresholds (mapped/reserved threshold) for device selection.
+  //   - Default: mapped_threshold=0 (map only to devices with 0 in-flight tasks).
   int32_t pipeline_depth = 0;
   int32_t starvation_threshold = 1;
   int32_t max_in_flight = 0;
@@ -3012,7 +3016,8 @@ public:
     missing_data_buffer.reserve(n_tasks);
     unique_read_buffer.reserve(n_tasks);
     frontier_blocks.reserve(n_tasks);
-    frontier_slot_by_data.reserve(n_devices);
+    // frontier_slot_by_data is indexed by data_id; n_data is unknown here so
+    // ensure_scratch_sizes will resize it on the first plan_tasks call.
     touched_frontier_data.reserve(n_tasks);
     selected_devices_buffer.reserve(n_devices);
     emit_task_indices_buffer.reserve(n_tasks);
