@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import hydra
 import numpy
+import task4feedback.fastsim2 as fastsim
 import torch
 from mpi4py import MPI
 from omegaconf import DictConfig, OmegaConf
@@ -35,8 +36,10 @@ SYSTEM_MEMORY = 96e9
 class MapperSpec:
     key: str
     label: str
-    mode: str  # parmetis | eft | external
+    mode: str  # parmetis | eft | external | internal
     mapper_factory: Callable[[DynamicJacobiGraph, DictConfig], object] | None = None
+    internal_mapper_factory: Callable[[DictConfig], fastsim.Mapper] | None = None
+    transition_factory: Callable[[DictConfig], fastsim.TransitionConditions] | None = None
 
 
 def write_results_atomic(path, lines):
@@ -133,6 +136,35 @@ def build_mapper_specs(cfg: DictConfig) -> list[MapperSpec]:
         MapperSpec(key="parmetis", label="ParMETIS", mode="parmetis"),
         MapperSpec(key="eft", label="EFT", mode="eft"),
         MapperSpec(
+            key="darts",
+            label="DARTS",
+            mode="internal",
+            internal_mapper_factory=lambda _cfg: fastsim.DARTSMapper(),
+            transition_factory=lambda _cfg: fastsim.DeviceThresholdTransitionConditions(
+                0, -1
+            ),
+        ),
+        MapperSpec(
+            key="darts_pipeline",
+            label="DARTS-Pipeline",
+            mode="internal",
+            internal_mapper_factory=lambda local_cfg: _make_darts_pipeline_mapper(
+                local_cfg.system.n_devices - 1
+            ),
+            transition_factory=lambda local_cfg: fastsim.DARTSPipelineTransitionConditions(
+                4, 4 * (local_cfg.system.n_devices - 1), 1
+            ),
+        ),
+        MapperSpec(
+            key="darts_extended",
+            label="DARTS-Extended",
+            mode="internal",
+            internal_mapper_factory=lambda _cfg: _make_darts_extended_mapper(),
+            transition_factory=lambda _cfg: fastsim.DeviceThresholdTransitionConditions(
+                0, -1
+            ),
+        ),
+        MapperSpec(
             key="b4",
             label="BlockCyclic(4x4)/Quadrant",
             mode="external",
@@ -165,6 +197,22 @@ def build_mapper_specs(cfg: DictConfig) -> list[MapperSpec]:
         specs = [s for s in specs if s.key != "b4"]
 
     return specs
+
+
+def _make_darts_pipeline_mapper(n_compute_devices: int) -> fastsim.DARTSMapper:
+    mapper = fastsim.DARTSMapper()
+    mapper.pipeline_depth = 4
+    mapper.starvation_threshold = 1
+    mapper.max_in_flight = 4 * n_compute_devices
+    return mapper
+
+
+def _make_darts_extended_mapper() -> fastsim.DARTSMapper:
+    mapper = fastsim.DARTSMapper()
+    mapper.extended_frontier_enabled = True
+    mapper.extended_batch_emission_enabled = True
+    mapper.extended_batch_emission_cap = 2
+    return mapper
 
 
 def _sim_base_metrics(sim):
@@ -223,6 +271,56 @@ def run_external_mapper_once(spec, cfg, graph, env, infenv, hand_peak, single_pe
     inf_sim = infenv.simulator.copy()
     inf_sim.enable_external_mapper()
     inf_sim.external_mapper = spec.mapper_factory(graph, cfg)
+    inf_sim.run()
+
+    print(f"{spec.label}: {_sim_base_metrics(sim)}")
+    return (
+        _extended_metrics(sim, inf_sim, hand_peak, single_peak),
+        _inf_extended_metrics(inf_sim, hand_peak, single_peak),
+    )
+
+
+def _build_internal_driver(
+    env,
+    internal_mapper: fastsim.Mapper,
+    transition_conditions: fastsim.TransitionConditions,
+):
+    base_input = env.simulator.input
+    sim_input = SimulatorInput(
+        base_input.graph,
+        base_input.data,
+        base_input.system,
+        task_noise=base_input.task_noise,
+        transition_conditions=transition_conditions,
+        top_k_candidates=base_input.top_k_candidates,
+    )
+    driver = SimulatorDriver(
+        sim_input,
+        internal_mapper=internal_mapper,
+        observer_factory=env.simulator.observer_factory,
+    )
+    driver.initialize()
+    driver.initialize_data()
+    driver.disable_external_mapper()
+    return driver
+
+
+def run_internal_mapper_once(spec, cfg, env, infenv, hand_peak, single_peak):
+    assert spec.internal_mapper_factory is not None
+    assert spec.transition_factory is not None
+
+    sim = _build_internal_driver(
+        env,
+        spec.internal_mapper_factory(cfg),
+        spec.transition_factory(cfg),
+    )
+    sim.run()
+
+    inf_sim = _build_internal_driver(
+        infenv,
+        spec.internal_mapper_factory(cfg),
+        spec.transition_factory(cfg),
+    )
     inf_sim.run()
 
     print(f"{spec.label}: {_sim_base_metrics(sim)}")
@@ -406,7 +504,7 @@ def configure_training(cfg: DictConfig):
         return
 
     needs_extended_metrics = any(
-        spec.mode in ("parmetis", "external") for spec in pending_specs
+        spec.mode in ("parmetis", "external", "internal") for spec in pending_specs
     )
 
     for _ in range(num_runs):
@@ -449,6 +547,15 @@ def configure_training(cfg: DictConfig):
             if spec.mode == "eft":
                 normal_result, inf_result = run_eft_once(
                     env, infenv, hand_calculated_peak, single_peak
+                )
+            elif spec.mode == "internal":
+                normal_result, inf_result = run_internal_mapper_once(
+                    spec=spec,
+                    cfg=cfg,
+                    env=env,
+                    infenv=infenv,
+                    hand_peak=hand_calculated_peak,
+                    single_peak=single_peak,
                 )
             else:
                 normal_result, inf_result = run_external_mapper_once(

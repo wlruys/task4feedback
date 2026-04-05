@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
 import numpy as np
+import task4feedback.fastsim2 as fastsim
 import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from torchrl.envs import (
@@ -25,14 +26,111 @@ from ..ml.env import RuntimeEnv
 from .graph import GraphBuilder
 
 
+RUNTIME_ALLOWED_KEYS = {
+    "task4feedback.fastsim2.HysteresisTransitionConditions": {
+        "_target_",
+        "open_in_flight",
+        "close_in_flight",
+        "starvation_threshold",
+    },
+    "task4feedback.fastsim2.RangeTransitionConditions": {
+        "_target_",
+        "mapped_reserved_gap",
+        "reserved_launched_gap",
+        "total_in_flight",
+    },
+    "task4feedback.fastsim2.BatchTransitionConditions": {
+        "_target_",
+        "batch_size",
+        "queue_threshold",
+        "max_in_flight",
+    },
+    "task4feedback.fastsim2.DeviceThresholdTransitionConditions": {
+        "_target_",
+        "mapped_threshold",
+        "reserved_threshold",
+    },
+    "task4feedback.fastsim2.DARTSAdaptiveTransitionConditions": {
+        "_target_",
+        "reserved_threshold",
+        "max_mapped",
+        "starvation_threshold",
+    },
+    "task4feedback.fastsim2.DARTSPipelineTransitionConditions": {
+        "_target_",
+        "pipeline_depth",
+        "max_in_flight",
+        "starvation_threshold",
+    },
+}
+
+MAPPER_ALLOWED_KEYS = {
+    "task4feedback.fastsim2.DequeueEFTMapper": {"_target_"},
+    "task4feedback.fastsim2.DARTSMapper": {
+        "_target_",
+        "mapped_threshold",
+        "reserved_threshold",
+        "extended_frontier_enabled",
+        "extended_batch_emission_enabled",
+        "extended_batch_emission_cap",
+        "trace_decisions",
+        "intra_window_coordination",
+        "cascade_passes",
+        "finish_time_aware",
+        "pipeline_depth",
+        "starvation_threshold",
+        "max_in_flight",
+    },
+}
+
+
+def _sanitize_target_cfg(cfg_node: Any, allowed_by_target: dict[str, set[str]]) -> Any:
+    cfg_dict = _oc_to_py(cfg_node)
+    if not isinstance(cfg_dict, dict):
+        return cfg_node
+    target = cfg_dict.get("_target_")
+    if target is None:
+        return cfg_dict
+
+    allowed = allowed_by_target.get(target)
+    if allowed is None:
+        cfg_dict.pop("_delete_", None)
+        return cfg_dict
+
+    return {key: value for key, value in cfg_dict.items() if key in allowed}
+
+
 def create_system(cfg: DictConfig):
     system = hydra.utils.instantiate(cfg.system)
     return system
 
 
 def create_conditions(cfg: DictConfig):
-    transition_conditions = hydra.utils.instantiate(cfg.runtime)
+    transition_conditions = hydra.utils.instantiate(
+        _sanitize_target_cfg(cfg.runtime, RUNTIME_ALLOWED_KEYS)
+    )
     return transition_conditions
+
+
+def create_internal_mapper(cfg: DictConfig):
+    mapper_cfg = OmegaConf.select(cfg, "mapper.internal", default=None)
+    if mapper_cfg is None:
+        return None
+    mapper_cfg = _sanitize_target_cfg(mapper_cfg, MAPPER_ALLOWED_KEYS)
+    if not isinstance(mapper_cfg, dict):
+        return hydra.utils.instantiate(mapper_cfg)
+
+    target = mapper_cfg.get("_target_")
+    if target is None:
+        return hydra.utils.instantiate(mapper_cfg)
+
+    mapper_t = hydra.utils.get_class(target)
+    mapper = mapper_t()
+    for key, value in mapper_cfg.items():
+        if key == "_target_":
+            continue
+        setattr(mapper, key, value)
+    return mapper
 
 
 def create_runtime_reward(cfg: DictConfig):
@@ -188,6 +286,7 @@ def make_env(
     m = graph
 
     transition_conditions = create_conditions(cfg)
+    internal_mapper = create_internal_mapper(cfg)
     runtime_env_t = create_runtime_reward(cfg)
     observer_factory, graph_spec = create_observer_factory(cfg)
 
@@ -209,7 +308,12 @@ def make_env(
     )
 
     env = runtime_env_t(
-        SimulatorFactory(input, graph_spec, observer_factory),
+        SimulatorFactory(
+            input,
+            graph_spec,
+            observer_factory,
+            internal_mapper=internal_mapper if internal_mapper is not None else fastsim.DequeueEFTMapper,
+        ),
         device="cpu",
         change_priority=cfg.graph.env.change_priority
         if hasattr(cfg.graph.env, "change_priority")

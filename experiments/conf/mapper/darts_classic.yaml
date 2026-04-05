@@ -1,0 +1,5 @@
+_delete_: true
+internal:
+  _target_: task4feedback.fastsim2.DARTSMapper
+  mapped_threshold: 0
+  reserved_threshold: -1

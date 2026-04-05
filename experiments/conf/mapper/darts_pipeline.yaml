@@ -1,0 +1,8 @@
+_delete_: true
+internal:
+  _target_: task4feedback.fastsim2.DARTSMapper
+  mapped_threshold: 0
+  reserved_threshold: -1
+  pipeline_depth: 4
+  starvation_threshold: 1
+  max_in_flight: 16

@@ -72,4 +72,30 @@ void init_mapper_ext(nb::module_ &m) {
       .def(nb::init<>())
       .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
       .def(nb::init<DequeueEFTMapper &>(), "other"_a);
+
+  nb::class_<DARTSMapper, Mapper>(m, "DARTSMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
+      .def(nb::init<DARTSMapper &>(), "other"_a)
+      .def_prop_rw("mapped_threshold", &DARTSMapper::get_mapped_threshold,
+                   &DARTSMapper::set_mapped_threshold)
+      .def_prop_rw("reserved_threshold", &DARTSMapper::get_reserved_threshold,
+                   &DARTSMapper::set_reserved_threshold)
+      .def_rw("extended_frontier_enabled", &DARTSMapper::extended_frontier_enabled)
+      .def_rw("extended_batch_emission_enabled", &DARTSMapper::extended_batch_emission_enabled)
+      .def_prop_rw("extended_batch_emission_cap", &DARTSMapper::get_extended_batch_emission_cap,
+                   &DARTSMapper::set_extended_batch_emission_cap)
+      .def_rw("trace_decisions", &DARTSMapper::trace_decisions)
+      .def_rw("intra_window_coordination", &DARTSMapper::intra_window_coordination)
+      .def_rw("cascade_passes", &DARTSMapper::cascade_passes)
+      .def_rw("finish_time_aware", &DARTSMapper::finish_time_aware)
+      .def_rw("pipeline_depth", &DARTSMapper::pipeline_depth)
+      .def_rw("starvation_threshold", &DARTSMapper::starvation_threshold)
+      .def_rw("max_in_flight", &DARTSMapper::max_in_flight)
+      .def("set_thresholds", &DARTSMapper::set_thresholds, "mapped_threshold"_a,
+           "reserved_threshold"_a)
+      .def("use_mapped_threshold", &DARTSMapper::use_mapped_threshold, "mapped_threshold"_a)
+      .def("use_reserved_threshold", &DARTSMapper::use_reserved_threshold,
+           "reserved_threshold"_a)
+      .def("disable_thresholds", &DARTSMapper::disable_thresholds);
 }

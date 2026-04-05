@@ -16,7 +16,7 @@ template <>
 size_t SchedulerT<TransitionConditions>::get_mappable_candidates(std::span<int64_t> v) {
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions;
+  auto &scheduler_conditions = *conditions;
   bool condition = queues.has_mappable() && scheduler_conditions.should_map(s, queues);
 
   if (!condition) {
@@ -123,7 +123,7 @@ ExecutionState SchedulerT<TransitionConditions>::map_tasks_from_python(ActionLis
   ZoneScoped;
   success_count = 0;
   auto &s = this->state;
-  auto &scheduler_conditions = conditions;
+  auto &scheduler_conditions = *conditions;
   const auto current_time = s.global_time;
   auto &mappable = queues.mappable;
   const auto &top_k_tasks = mappable.top_k_view();
@@ -195,7 +195,7 @@ void SchedulerT<TransitionConditions>::map_tasks(MapperEvent &map_event, EventMa
   success_count = 0;
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
-  auto &scheduler_conditions = conditions;
+  auto &scheduler_conditions = *conditions;
   auto &mappable = queues.mappable;
   auto current_time = s.global_time;
 
@@ -336,7 +336,7 @@ void SchedulerT<TransitionConditions>::reserve_tasks(ReserverEvent &reserve_even
   T4F_INVARIANT(this->eviction_state == EvictionState::NONE);
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions;
+  auto &scheduler_conditions = *conditions;
 
   auto &reservable = queues.reservable;
   reservable.reset();
@@ -630,7 +630,7 @@ bool SchedulerT<TransitionConditions>::launch_compute_tasks(EventManager &event_
   ZoneScoped;
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions;
+  auto &scheduler_conditions = *conditions;
   auto current_time = s.global_time;
   auto &launchable = queues.launchable;
 
@@ -680,7 +680,7 @@ bool SchedulerT<TransitionConditions>::launch_data_tasks(EventManager &event_man
   ZoneScoped;
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions;
+  auto &scheduler_conditions = *conditions;
   auto current_time = s.global_time;
   auto &data_launchable = queues.data_launchable;
 
@@ -717,7 +717,7 @@ bool SchedulerT<TransitionConditions>::launch_eviction_tasks(EventManager &event
   ZoneScoped;
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions;
+  auto &scheduler_conditions = *conditions;
   auto current_time = s.global_time;
   auto &eviction_launchable = queues.eviction_launchable;
 

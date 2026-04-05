@@ -722,7 +722,7 @@ class SimulatorInput:
     data: DataBlocks
     system: System
     task_noise: TaskNoise
-    transition_conditions: fastsim.HysteresisTransitionConditions
+    transition_conditions: fastsim.TransitionConditions
     top_k_candidates: int = 1
 
     def __init__(
@@ -731,17 +731,13 @@ class SimulatorInput:
         data: DataBlocks,
         system: System,
         task_noise: TaskNoise | None = None,
-        transition_conditions: fastsim.HysteresisTransitionConditions | None = None,
+        transition_conditions: fastsim.TransitionConditions | None = None,
         top_k_candidates: int = 1,
     ):
         if transition_conditions is None:
             transition_conditions = fastsim.HysteresisTransitionConditions()
-        if not isinstance(
-            transition_conditions, fastsim.HysteresisTransitionConditions
-        ):
-            raise TypeError(
-                "transition_conditions must be HysteresisTransitionConditions"
-            )
+        if not isinstance(transition_conditions, fastsim.TransitionConditions):
+            raise TypeError("transition_conditions must derive from TransitionConditions")
 
         if task_noise is None:
             task_noise = TaskNoise(graph.static_graph)

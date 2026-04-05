@@ -1,0 +1,5 @@
+_delete_: true
+_target_: task4feedback.fastsim2.DARTSAdaptiveTransitionConditions
+reserved_threshold: 0
+max_mapped: 16
+starvation_threshold: 1
