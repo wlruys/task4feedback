@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -16,6 +17,8 @@ INTERNAL_MAPPER_NAMES = (
     "kahypar",
     "metis",
     "darts",
+    "enhanced_darts",
+    # Deprecated alias retained for CLI backward compatibility.
     "darts_extended",
 )
 
@@ -42,63 +45,62 @@ class ExternalMapperConfig:
 @dataclass(frozen=True)
 class TransitionConfig:
     kind: str = "auto"
+    planned_threshold: int = 1
+    max_reserved_threshold: int = 16
     batch_size: int = 5
     queue_threshold: int = 5
     max_in_flight: Optional[int] = None
-    mapped_threshold: int = 0
-    reserved_threshold: int = -1
     mapped_reserved_gap: int = 5
     reserved_launched_gap: int = 5
     total_in_flight: Optional[int] = None
     hysteresis_open: int = 16
     hysteresis_close: int = 36
     hysteresis_starvation: int = 2
-    pipeline_depth: int = 2
-    pipeline_starvation: int = 1
 
 
 @dataclass(frozen=True)
 class DARTSConfig:
-    """Configuration for DARTSMapper variants.
+    """Configuration for the new DARTSMapper.
 
-    Pipeline-depth mode (pipeline_depth > 0):
-        pipeline_depth      -- normal pipelining target per GPU device.
-        starvation_threshold -- emergency lower bound; devices below this are
-                               selected even when max_in_flight is hit (must be
-                               <= pipeline_depth).  Mirrors the same field in
-                               DARTSPipelineTransitionConditions.
-        max_in_flight       -- global cap for device selection (0 = disabled).
-                               Set to the same value as the transition condition's
-                               max_in_flight so the two stay coherent.
+    Active fields:
+        short_horizon_threshold
+        medium_horizon_threshold
 
-    Legacy threshold mode (pipeline_depth == 0):
-        mapped_threshold / reserved_threshold control device selection via
-        DeviceThresholdState.
+    All remaining fields are legacy/deprecated and retained only so older
+    scripts can still instantiate DARTSConfig without failing.
     """
-    # Device selection (legacy threshold mode, pipeline_depth == 0)
-    mapped_threshold: int = 0   # map only to idle devices (0 tasks mapped)
-    reserved_threshold: int = -1  # reserved threshold disabled
+    # New DARTS knobs.
+    short_horizon_threshold: int = 2
+    medium_horizon_threshold: int = 4
+    emit_short_horizon: bool = True
+    emit_medium_horizon: bool = True
+    short_horizon_k: int = 1
+    medium_horizon_k: int = 1
+
+    # Deprecated legacy knobs retained for backward compatibility. The new
+    # DARTS mapper ignores these, but we use mapped/reserved thresholds to
+    # derive short/medium horizon defaults when explicitly set.
+    mapped_threshold: int = 0
+    reserved_threshold: int = -1
     # Frontier / batch emission (enabled by default — sweet spot from sweep)
     extended_frontier: bool = True
     extended_batch: bool = True
     extended_batch_cap: int = 2  # cap=2 consistently outperformed cap=4 in sweeps
-    intra_window_coordination: bool = False
-    cascade_passes: int = 3
     finish_time_aware: bool = False
     # Push-pipeline mode: number of cascade passes per device per trigger.
     # 0 = classical DARTS (governed by cascade_passes + intra_window_coordination).
     # >0 = fill the pipeline with this many blocks per device per trigger;
     #      cross-device IWC is implicitly enabled to prevent N-fold data duplication.
     push_pipeline_depth: int = 0
-    # simulate_memory: also treat emitted tasks' WRITE data as "virtually present"
-    # (extends cascade to producer-consumer chains; minimal gain for iterative stencils).
-    simulate_memory: bool = False
     # Global EFT batch mode: task-first EFT with planned-data tracking across
     # all selected devices.  Matches DequeueEFTMapper quality in abundant-memory
     # regimes while keeping DeviceThreshold transition semantics.
     global_eft_batch: bool = False
     # Per-device task cap for global_eft_batch (1=safe, 4-16=pipelined).
     global_eft_batch_cap: int = 1
+    # All-devices mode: considers ALL devices per task (not just idle ones).
+    # Also persists dev_eft across triggers.  Matches DequeueEFTMapper quality.
+    global_eft_all_devices: bool = False
     # Classical DARTS mode: one device per trigger (matches StarPU's per-GPU model).
     single_device_per_trigger: bool = False
     # Pipeline-depth mode (disabled by default)
@@ -108,11 +110,27 @@ class DARTSConfig:
 
 
 @dataclass(frozen=True)
+class EnhancedDARTSConfig:
+    """Configuration for EnhancedDARTSMapper.
+
+    This mirrors the C++ EnhancedDARTSMapper::Config struct.
+    """
+    short_horizon_threshold: int = 4
+    medium_horizon_threshold: int = 8
+    emit_short_horizon: bool = True
+    emit_medium_horizon: bool = True
+    short_horizon_k: int = 2
+    medium_horizon_k: int = 4
+    finish_time_aware: bool = True
+    local_data_first: bool = True
+
+
+@dataclass(frozen=True)
 class MemoryAwareEFTConfig:
     alpha: float = 1.0
-    eviction_cost_location_state: str = "launched"
-    overflow_state: str = "launched"
-    overflow_mode: str = "full_spill"
+    eviction_cost_location_state: str = "reserved"
+    overflow_state: str = "reserved"
+    overflow_mode: str = "incoming_only"
 
 
 class CellBasedExternalMapper:
@@ -168,19 +186,35 @@ def mapper_label(
     if mapper_name == "metis":
         return "METISMapper"
     if mapper_name in {"darts", "darts_extended"}:
-        cfg = darts_config or (
-            DARTSConfig(extended_batch_cap=4)
-            if mapper_name == "darts_extended"
-            else DARTSConfig()
-        )
-        mt = cfg.mapped_threshold
-        rt = cfg.reserved_threshold
-        threshold_str = f"mt={mt}" if rt < 0 else f"rt={rt}"
-        iwc_str = f",iwc={cfg.cascade_passes}" if cfg.intra_window_coordination else ""
-        if cfg.extended_frontier:
-            cap_str = f",cap={cfg.extended_batch_cap}" if cfg.extended_batch else ""
-            return f"DARTSMapper(ext{'_batch' if cfg.extended_batch else ''}{cap_str},{threshold_str}{iwc_str})"
-        return f"DARTSMapper({threshold_str}{iwc_str})"
+        if mapper_name == "darts_extended":
+            warnings.warn(
+                "Mapper 'darts_extended' is deprecated; use 'darts' with DARTSConfig thresholds.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        cfg = darts_config or DARTSConfig()
+        sh, mh = _resolve_darts_thresholds(cfg)
+        parts = [f"sh={sh}", f"mh={mh}"]
+        if cfg.emit_short_horizon:
+            parts.append(f"esh=True,shk={cfg.short_horizon_k}")
+        if cfg.emit_medium_horizon:
+            parts.append(f"emh=True,mhk={cfg.medium_horizon_k}")
+        return f"DARTSMapper({','.join(parts)})"
+    if mapper_name == "enhanced_darts":
+        cfg = darts_config if isinstance(darts_config, EnhancedDARTSConfig) else EnhancedDARTSConfig()
+        parts = [
+            f"sh={cfg.short_horizon_threshold}",
+            f"mh={cfg.medium_horizon_threshold}",
+        ]
+        if cfg.emit_short_horizon:
+            parts.append(f"esh=True,shk={cfg.short_horizon_k}")
+        if cfg.emit_medium_horizon:
+            parts.append(f"emh=True,mhk={cfg.medium_horizon_k}")
+        if not cfg.finish_time_aware:
+            parts.append("ft=False")
+        if not cfg.local_data_first:
+            parts.append("ldf=False")
+        return f"EnhancedDARTSMapper({','.join(parts)})"
     if mapper_name == "block_cyclic":
         return "ExternalBlockCyclicMapper"
     if mapper_name == "row_cyclic":
@@ -231,22 +265,26 @@ def _resolve_memory_aware_overflow_mode(name: str) -> int:
 
 def make_darts_mapper(cfg: "DARTSConfig") -> "fastsim.DARTSMapper":
     mapper = fastsim.DARTSMapper()
-    mapper.mapped_threshold = cfg.mapped_threshold
-    mapper.reserved_threshold = cfg.reserved_threshold
-    mapper.extended_frontier_enabled = cfg.extended_frontier
-    mapper.extended_batch_emission_enabled = cfg.extended_batch
-    mapper.extended_batch_emission_cap = cfg.extended_batch_cap
-    mapper.intra_window_coordination = cfg.intra_window_coordination
-    mapper.push_pipeline_depth = cfg.push_pipeline_depth
-    mapper.simulate_memory = cfg.simulate_memory
-    mapper.cascade_passes = cfg.cascade_passes
+    sh, mh = _resolve_darts_thresholds(cfg)
+    mapper.short_horizon_threshold = sh
+    mapper.medium_horizon_threshold = mh
+    mapper.emit_short_horizon = cfg.emit_short_horizon
+    mapper.emit_medium_horizon = cfg.emit_medium_horizon
+    mapper.short_horizon_k = cfg.short_horizon_k
+    mapper.medium_horizon_k = cfg.medium_horizon_k
+    return mapper
+
+
+def make_enhanced_darts_mapper(cfg: "EnhancedDARTSConfig") -> "fastsim.EnhancedDARTSMapper":
+    mapper = fastsim.EnhancedDARTSMapper()
+    mapper.short_horizon_threshold = cfg.short_horizon_threshold
+    mapper.medium_horizon_threshold = cfg.medium_horizon_threshold
+    mapper.emit_short_horizon = cfg.emit_short_horizon
+    mapper.emit_medium_horizon = cfg.emit_medium_horizon
+    mapper.short_horizon_k = cfg.short_horizon_k
+    mapper.medium_horizon_k = cfg.medium_horizon_k
     mapper.finish_time_aware = cfg.finish_time_aware
-    mapper.global_eft_batch = cfg.global_eft_batch
-    mapper.global_eft_batch_cap = cfg.global_eft_batch_cap
-    mapper.single_device_per_trigger = cfg.single_device_per_trigger
-    mapper.pipeline_depth = cfg.pipeline_depth
-    mapper.starvation_threshold = cfg.starvation_threshold
-    mapper.max_in_flight = cfg.max_in_flight
+    mapper.local_data_first = cfg.local_data_first
     return mapper
 
 
@@ -278,13 +316,21 @@ def make_internal_mapper(
             raise RuntimeError("METISMapper is not available in this build")
         return mapper_cls()
     if mapper_name in {"darts", "darts_extended"}:
+        if mapper_name == "darts_extended":
+            warnings.warn(
+                "Mapper 'darts_extended' is deprecated; use 'darts'.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if darts_config is not None:
             return make_darts_mapper(darts_config)
-        # darts: threshold mode (mt=0), extended batch cap=2 — best from axis-1 sweep
-        # darts_extended: more aggressive batch emission cap=4
-        if mapper_name == "darts":
-            return make_darts_mapper(DARTSConfig())
-        return make_darts_mapper(DARTSConfig(extended_batch_cap=4))
+        return make_darts_mapper(DARTSConfig())
+    if mapper_name == "enhanced_darts":
+        cfg = darts_config if isinstance(darts_config, EnhancedDARTSConfig) else EnhancedDARTSConfig()
+        mapper_cls = getattr(fastsim, "EnhancedDARTSMapper", None)
+        if mapper_cls is None:
+            raise RuntimeError("EnhancedDARTSMapper is not available in this build")
+        return make_enhanced_darts_mapper(cfg)
     raise ValueError(f"Unsupported internal mapper '{name}'")
 
 
@@ -340,10 +386,16 @@ def make_transition_conditions(
     transition_config = config or TransitionConfig()
     kind = transition_config.kind.lower()
     if kind == "auto":
-        if mapper_name.lower() in {"darts", "darts_extended"}:
-            kind = "device_threshold"
+        if mapper_name.lower() in {"darts", "darts_extended", "enhanced_darts"}:
+            kind = "planned"
         else:
             kind = "hysteresis"
+
+    if kind == "planned":
+        return fastsim.PlannedThresholdTransitionConditions(
+            transition_config.planned_threshold,
+            transition_config.max_reserved_threshold,
+        )
 
     if kind == "default":
         return fastsim.DefaultTransitionConditions()
@@ -357,11 +409,6 @@ def make_transition_conditions(
             transition_config.batch_size,
             transition_config.queue_threshold,
             max_in_flight,
-        )
-    if kind == "device_threshold":
-        return fastsim.DeviceThresholdTransitionConditions(
-            transition_config.mapped_threshold,
-            transition_config.reserved_threshold,
         )
     if kind == "range":
         total_in_flight = (
@@ -380,29 +427,28 @@ def make_transition_conditions(
             transition_config.hysteresis_close,
             transition_config.hysteresis_starvation,
         )
-    if kind == "darts_adaptive":
-        max_mapped = (
-            top_k_candidates
-            if transition_config.max_in_flight is None
-            else transition_config.max_in_flight
-        )
-        return fastsim.DARTSAdaptiveTransitionConditions(
-            transition_config.reserved_threshold,
-            max_mapped,
-            transition_config.pipeline_starvation,
-        )
-    if kind == "darts_pipeline":
-        max_in_flight = (
-            top_k_candidates
-            if transition_config.max_in_flight is None
-            else transition_config.max_in_flight
-        )
-        return fastsim.DARTSPipelineTransitionConditions(
-            transition_config.pipeline_depth,
-            max_in_flight,
-            transition_config.pipeline_starvation,
-        )
     raise ValueError(f"Unsupported transition condition kind '{transition_config.kind}'")
+
+
+def _resolve_darts_thresholds(cfg: "DARTSConfig") -> tuple[int, int]:
+    short_horizon = cfg.short_horizon_threshold
+    medium_horizon = cfg.medium_horizon_threshold
+
+    legacy_mapped_used = cfg.mapped_threshold != 0
+    legacy_reserved_used = cfg.reserved_threshold >= 0
+    if legacy_mapped_used or legacy_reserved_used:
+        warnings.warn(
+            "DARTSConfig mapped/reserved thresholds are deprecated; use short_horizon_threshold and medium_horizon_threshold.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        short_horizon = max(1, cfg.mapped_threshold + 1) if cfg.mapped_threshold >= 0 else short_horizon
+        if cfg.reserved_threshold >= 0:
+            medium_horizon = max(short_horizon + 1, cfg.reserved_threshold + 1)
+        elif medium_horizon <= short_horizon:
+            medium_horizon = short_horizon + 1
+
+    return short_horizon, medium_horizon
 
 
 def _resolve_processor_grid(

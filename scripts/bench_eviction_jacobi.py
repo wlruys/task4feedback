@@ -22,6 +22,7 @@ from bench_mapper_support import (
     ALL_MAPPER_NAMES,
     EXTERNAL_MAPPER_NAMES,
     DARTSConfig,
+    EnhancedDARTSConfig,
     ExternalMapperConfig,
     MemoryAwareEFTConfig,
     TransitionConfig,
@@ -64,7 +65,7 @@ DEFAULT_N_SEEDS = 1
 DEFAULT_REPS = 1
 DEFAULT_MAPPER = "dequeue_eft"
 DEFAULT_EVICTION_POLICY = "lru"
-DEFAULT_COMPARE_MAPPERS = "dequeue_eft,memory_aware_eft,kahypar,metis,block_cyclic,row_cyclic"
+DEFAULT_COMPARE_MAPPERS = "dequeue_eft,memory_aware_eft,kahypar,metis,darts,enhanced_darts,block_cyclic,row_cyclic"
 DEFAULT_COMPARE_EVICTION_POLICIES = "lru,least_used_mapped"
 
 
@@ -212,7 +213,7 @@ def run_once(
     memory_aware_eft_alpha: float = 1.0,
     memory_aware_eft_config: Optional["MemoryAwareEFTConfig"] = None,
     external_mapper_config: Optional["ExternalMapperConfig"] = None,
-    darts_config: Optional["DARTSConfig"] = None,
+    darts_config: Optional["DARTSConfig | EnhancedDARTSConfig"] = None,
 ):
     if is_external_mapper(mapper_name):
         from bench_mapper_support import ExternalMapperConfig as _EMC
@@ -297,6 +298,7 @@ def run_scenario(
     memory_aware_eft_config: MemoryAwareEFTConfig,
     external_mapper_config: ExternalMapperConfig,
     transition_config: TransitionConfig,
+    darts_config: Optional["DARTSConfig | EnhancedDARTSConfig"] = None,
     domain_ratio: float,
     arithmetic_intensity: float,
     arithmetic_complexity: float,
@@ -361,6 +363,7 @@ def run_scenario(
             memory_aware_eft_alpha=memory_aware_eft_alpha,
             memory_aware_eft_config=memory_aware_eft_config,
             external_mapper_config=external_mapper_config,
+            darts_config=darts_config,
         )
         if result["status"] != ExecutionState.COMPLETE:
             print(f"  rep {rep + 1}: FAILED status={result['status']}")
@@ -606,9 +609,21 @@ def main() -> None:
     parser.add_argument("--processor-cols", type=int, default=None, help="External block-cyclic processor cols")
     parser.add_argument(
         "--transition-kind",
-        choices=("auto", "default", "batch", "device_threshold", "range", "hysteresis"),
+        choices=("auto", "planned", "default", "batch", "range", "hysteresis"),
         default="auto",
-        help="Transition-condition mode. 'auto' preserves the current mapper-based default.",
+        help="Transition-condition mode. Use 'planned' for DARTS-compatible behavior.",
+    )
+    parser.add_argument(
+        "--transition-planned-threshold",
+        type=int,
+        default=1,
+        help="PlannedThresholdTransitionConditions.planned_threshold",
+    )
+    parser.add_argument(
+        "--transition-max-reserved-threshold",
+        type=int,
+        default=16,
+        help="PlannedThresholdTransitionConditions.max_reserved_threshold",
     )
     parser.add_argument("--transition-batch-size", type=int, default=5)
     parser.add_argument("--transition-queue-threshold", type=int, default=5)
@@ -618,8 +633,6 @@ def main() -> None:
         default=None,
         help="Override BatchTransitionConditions.max_in_flight; defaults to top-k when omitted.",
     )
-    parser.add_argument("--transition-mapped-threshold", type=int, default=0)
-    parser.add_argument("--transition-reserved-threshold", type=int, default=-1)
     parser.add_argument("--transition-mapped-reserved-gap", type=int, default=5)
     parser.add_argument("--transition-reserved-launched-gap", type=int, default=5)
     parser.add_argument(
@@ -645,11 +658,11 @@ def main() -> None:
     )
     transition_config = TransitionConfig(
         kind=args.transition_kind,
+        planned_threshold=args.transition_planned_threshold,
+        max_reserved_threshold=args.transition_max_reserved_threshold,
         batch_size=args.transition_batch_size,
         queue_threshold=args.transition_queue_threshold,
         max_in_flight=args.transition_max_in_flight,
-        mapped_threshold=args.transition_mapped_threshold,
-        reserved_threshold=args.transition_reserved_threshold,
         mapped_reserved_gap=args.transition_mapped_reserved_gap,
         reserved_launched_gap=args.transition_reserved_launched_gap,
         total_in_flight=args.transition_total_in_flight,

@@ -81,7 +81,6 @@ PHASE1_MAPPERS = [
     "kahypar",
     "metis",           # skipped gracefully if not in build
     "darts",
-    "darts_extended",
     "block_cyclic",
     "row_cyclic",
     "col_cyclic",
@@ -89,10 +88,10 @@ PHASE1_MAPPERS = [
 ]
 
 # Transition kinds to sweep in phases 2 & 3
-ALL_TRANSITION_KINDS = ["default", "batch", "device_threshold", "range", "hysteresis"]
+ALL_TRANSITION_KINDS = ["planned", "default", "batch", "range", "hysteresis"]
 
 # Mappers for transition-condition sweep (internal mappers only; external mappers ignore it)
-PHASE2_MAPPERS = ["dequeue_eft", "memory_aware_eft", "darts", "darts_extended"]
+PHASE2_MAPPERS = ["dequeue_eft", "memory_aware_eft", "darts"]
 
 
 # ---------------------------------------------------------------------------

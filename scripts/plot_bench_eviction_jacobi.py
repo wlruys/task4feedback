@@ -42,6 +42,8 @@ from bench_eviction_jacobi import DEFAULT_COMPARE_EVICTION_POLICIES, DEFAULT_COM
 from bench_eviction_jacobi import GPU_MEM as DEFAULT_GPU_MEM
 from bench_eviction_jacobi import run_scenario
 from bench_mapper_support import (
+    DARTSConfig,
+    EnhancedDARTSConfig,
     ExternalMapperConfig,
     MemoryAwareEFTConfig,
     TransitionConfig,
@@ -129,6 +131,8 @@ def collect_results(
     memory_aware_eft_config: MemoryAwareEFTConfig,
     external_mapper_config: ExternalMapperConfig,
     transition_config: TransitionConfig,
+    darts_config: DARTSConfig,
+    enhanced_darts_config: EnhancedDARTSConfig,
     domain_ratio: float,
     arithmetic_intensity: float,
     arithmetic_complexity: float,
@@ -163,12 +167,17 @@ def collect_results(
                             mapper_name=mapper_name,
                             eviction_policy_name=eviction_policy_name,
                             reps=reps,
-                            top_k_candidates=256,
+                            top_k_candidates=64,
                             randomize_initial_placement=randomize_initial_placement,
                             memory_aware_eft_alpha=memory_aware_eft_alpha,
                             memory_aware_eft_config=memory_aware_eft_config,
                             external_mapper_config=external_mapper_config,
                             transition_config=transition_config,
+                            darts_config=(
+                                enhanced_darts_config
+                                if mapper_name == "enhanced_darts"
+                                else darts_config
+                            ),
                             domain_ratio=domain_ratio,
                             arithmetic_intensity=arithmetic_intensity,
                             arithmetic_complexity=arithmetic_complexity,
@@ -314,18 +323,18 @@ def main() -> None:
     parser.add_argument("--memory-aware-eft-alpha", type=float, default=1.0)
     parser.add_argument(
         "--memory-aware-location-state",
-        choices=("mapped", "launched"),
-        default="mapped",
+        choices=("launched", "reserved", "mapped"),
+        default="reserved",
     )
     parser.add_argument(
         "--memory-aware-overflow-state",
-        choices=("reserved", "mapped"),
+        choices=("reserved", "mapped", "launched"),
         default="reserved",
     )
     parser.add_argument(
         "--memory-aware-overflow-mode",
-        choices=("full_spill", "incoming_only", "task_only"),
-        default="full_spill",
+        choices=("full_spill", "incoming_only"),
+        default="incoming_only",
     )
     parser.add_argument("--block-rows", type=int, default=1)
     parser.add_argument("--block-cols", type=int, default=1)
@@ -333,22 +342,36 @@ def main() -> None:
     parser.add_argument("--processor-cols", type=int, default=None)
     parser.add_argument(
         "--transition-kind",
-        choices=("auto", "default", "batch", "device_threshold", "range", "hysteresis", "darts_pipeline"),
+        choices=("auto", "planned", "default", "batch", "range", "hysteresis"),
         default="auto",
     )
+    parser.add_argument("--transition-planned-threshold", type=int, default=1)
+    parser.add_argument("--transition-max-reserved-threshold", type=int, default=16)
     parser.add_argument("--transition-batch-size", type=int, default=5)
     parser.add_argument("--transition-queue-threshold", type=int, default=5)
     parser.add_argument("--transition-max-in-flight", type=int, default=None)
-    parser.add_argument("--transition-mapped-threshold", type=int, default=0)
-    parser.add_argument("--transition-reserved-threshold", type=int, default=-1)
     parser.add_argument("--transition-mapped-reserved-gap", type=int, default=5)
     parser.add_argument("--transition-reserved-launched-gap", type=int, default=5)
     parser.add_argument("--transition-total-in-flight", type=int, default=None)
     parser.add_argument("--transition-hysteresis-open", type=int, default=16)
     parser.add_argument("--transition-hysteresis-close", type=int, default=36)
     parser.add_argument("--transition-hysteresis-starvation", type=int, default=2)
-    parser.add_argument("--transition-pipeline-depth", type=int, default=2)
-    parser.add_argument("--transition-pipeline-starvation", type=int, default=1)
+    parser.add_argument("--darts-short-horizon-threshold", type=int, default=4)
+    parser.add_argument("--darts-medium-horizon-threshold", type=int, default=8)
+    parser.add_argument("--darts-emit-short-horizon", action="store_true", default=True)
+    parser.add_argument("--darts-emit-medium-horizon", action="store_true", default=True)
+    parser.add_argument("--darts-short-horizon-k", type=int, default=4)
+    parser.add_argument("--darts-medium-horizon-k", type=int, default=4)
+    parser.add_argument("--enhanced-darts-short-horizon-threshold", type=int, default=4)
+    parser.add_argument("--enhanced-darts-medium-horizon-threshold", type=int, default=8)
+    parser.add_argument("--enhanced-darts-emit-short-horizon", action="store_true", default=True)
+    parser.add_argument("--enhanced-darts-emit-medium-horizon", action="store_true", default=True)
+    parser.add_argument("--enhanced-darts-short-horizon-k", type=int, default=4)
+    parser.add_argument("--enhanced-darts-medium-horizon-k", type=int, default=4)
+    parser.add_argument("--enhanced-darts-no-finish-time-aware", action="store_true", default=False)
+    parser.add_argument("--enhanced-darts-no-local-data-first", action="store_true", default=False)
+    parser.add_argument("--enhanced-darts-simulate-memory", action="store_true", default=True)
+    parser.add_argument("--enhanced-darts-cascade-passes", type=int, default=1)
     parser.add_argument("--domain-ratio", type=float, default=1.0)
     parser.add_argument("--arithmetic-intensity", type=float, default=595.5555555)
     parser.add_argument("--arithmetic-complexity", type=float, default=1.0)
@@ -379,25 +402,41 @@ def main() -> None:
     )
     transition_config = TransitionConfig(
         kind=args.transition_kind,
+        planned_threshold=args.transition_planned_threshold,
+        max_reserved_threshold=args.transition_max_reserved_threshold,
         batch_size=args.transition_batch_size,
         queue_threshold=args.transition_queue_threshold,
         max_in_flight=args.transition_max_in_flight,
-        mapped_threshold=args.transition_mapped_threshold,
-        reserved_threshold=args.transition_reserved_threshold,
         mapped_reserved_gap=args.transition_mapped_reserved_gap,
         reserved_launched_gap=args.transition_reserved_launched_gap,
         total_in_flight=args.transition_total_in_flight,
         hysteresis_open=args.transition_hysteresis_open,
         hysteresis_close=args.transition_hysteresis_close,
         hysteresis_starvation=args.transition_hysteresis_starvation,
-        pipeline_depth=args.transition_pipeline_depth,
-        pipeline_starvation=args.transition_pipeline_starvation,
     )
     memory_aware_eft_config = MemoryAwareEFTConfig(
         alpha=args.memory_aware_eft_alpha,
         eviction_cost_location_state=args.memory_aware_location_state,
         overflow_state=args.memory_aware_overflow_state,
         overflow_mode=args.memory_aware_overflow_mode,
+    )
+    darts_config = DARTSConfig(
+        short_horizon_threshold=args.darts_short_horizon_threshold,
+        medium_horizon_threshold=args.darts_medium_horizon_threshold,
+        emit_short_horizon=args.darts_emit_short_horizon,
+        emit_medium_horizon=args.darts_emit_medium_horizon,
+        short_horizon_k=args.darts_short_horizon_k,
+        medium_horizon_k=args.darts_medium_horizon_k,
+    )
+    enhanced_darts_config = EnhancedDARTSConfig(
+        short_horizon_threshold=args.enhanced_darts_short_horizon_threshold,
+        medium_horizon_threshold=args.enhanced_darts_medium_horizon_threshold,
+        emit_short_horizon=args.enhanced_darts_emit_short_horizon,
+        emit_medium_horizon=args.enhanced_darts_emit_medium_horizon,
+        short_horizon_k=args.enhanced_darts_short_horizon_k,
+        medium_horizon_k=args.enhanced_darts_medium_horizon_k,
+        finish_time_aware=not args.enhanced_darts_no_finish_time_aware,
+        local_data_first=not args.enhanced_darts_no_local_data_first,
     )
     rows = collect_results(
         level_memory_gb_values=_parse_float_list(args.level_memory_gb),
@@ -414,6 +453,8 @@ def main() -> None:
         memory_aware_eft_config=memory_aware_eft_config,
         external_mapper_config=external_mapper_config,
         transition_config=transition_config,
+        darts_config=darts_config,
+        enhanced_darts_config=enhanced_darts_config,
         domain_ratio=args.domain_ratio,
         arithmetic_intensity=args.arithmetic_intensity,
         arithmetic_complexity=args.arithmetic_complexity,

@@ -124,9 +124,16 @@ def make_sim_input(graph, system):
 
 def run_once(sim_input, mapper_cls, mapper_kwargs=None):
     mapper_kwargs = mapper_kwargs or {}
+    if mapper_kwargs:
+        instance = mapper_cls()
+        for k, v in mapper_kwargs.items():
+            setattr(instance, k, v)
+        internal_mapper = instance
+    else:
+        internal_mapper = mapper_cls
     fresh = SimulatorDriver(
         sim_input,
-        internal_mapper=mapper_cls(**mapper_kwargs) if mapper_kwargs else mapper_cls,
+        internal_mapper=internal_mapper,
     )
     fresh.initialize()
     fresh.initialize_data()

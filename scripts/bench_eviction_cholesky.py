@@ -67,7 +67,7 @@ DEFAULT_N_SEEDS = 1
 DEFAULT_REPS = 1
 DEFAULT_MAPPER = "dequeue_eft"
 DEFAULT_EVICTION_POLICY = "lru"
-DEFAULT_COMPARE_MAPPERS = "dequeue_eft,memory_aware_eft,metis,darts,darts_extended,block_cyclic,row_cyclic"
+DEFAULT_COMPARE_MAPPERS = "dequeue_eft,memory_aware_eft,metis,darts,block_cyclic,row_cyclic"
 DEFAULT_COMPARE_EVICTION_POLICIES = "lru,least_used_mapped"
 DEFAULT_PRESSURE_PRESETS = "light,moderate,heavy"
 DEFAULT_MEMORY_AWARE_EFT_ALPHA = 1.0
@@ -610,9 +610,29 @@ def main() -> None:
     parser.add_argument("--processor-cols", type=int, default=None, help="External block-cyclic processor cols")
     parser.add_argument(
         "--transition-kind",
-        choices=("auto", "default", "batch", "device_threshold", "range", "hysteresis"),
+        choices=(
+            "auto",
+            "planned",
+            "planned_threshold",
+            "default",
+            "batch",
+            "device_threshold",
+            "range",
+            "hysteresis",
+            "darts_adaptive",
+            "darts_pipeline",
+        ),
         default="auto",
-        help="Transition-condition mode. 'auto' preserves the current mapper-based default.",
+        help=(
+            "Transition-condition mode. Use 'planned' for new DARTS-compatible behavior. "
+            "'planned_threshold', 'device_threshold', 'darts_adaptive', and 'darts_pipeline' are deprecated aliases."
+        ),
+    )
+    parser.add_argument(
+        "--transition-planned-threshold",
+        type=int,
+        default=1,
+        help="PlannedThresholdTransitionConditions.planned_threshold",
     )
     parser.add_argument("--transition-batch-size", type=int, default=5)
     parser.add_argument("--transition-queue-threshold", type=int, default=5)
@@ -651,11 +671,11 @@ def main() -> None:
     )
     transition_config = TransitionConfig(
         kind=args.transition_kind,
+        planned_threshold=args.transition_planned_threshold,
+        max_reserved_threshold=args.transition_max_reserved_threshold,
         batch_size=args.transition_batch_size,
         queue_threshold=args.transition_queue_threshold,
         max_in_flight=args.transition_max_in_flight,
-        mapped_threshold=args.transition_mapped_threshold,
-        reserved_threshold=args.transition_reserved_threshold,
         mapped_reserved_gap=args.transition_mapped_reserved_gap,
         reserved_launched_gap=args.transition_reserved_launched_gap,
         total_in_flight=args.transition_total_in_flight,

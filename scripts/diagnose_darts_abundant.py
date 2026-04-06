@@ -172,113 +172,36 @@ def main():
     tc_hysteresis = TransitionConfig(
         kind="hysteresis", hysteresis_open=16, hysteresis_close=36, hysteresis_starvation=2)
 
-    # DeviceThreshold is the CORRECT pairing for DARTS threshold mode (mt ≥ 0).
-    # Hysteresis + DARTS-threshold is a MISMATCH: hysteresis may fire when every GPU
-    # already has ≥ 1 unreserved task, causing DARTS to return empty actions and
-    # generate "no-progress" warnings.  Never combine them.
-    tc_darts_mt0 = TransitionConfig(
-        kind="device_threshold", mapped_threshold=0, reserved_threshold=-1)
-    tc_darts_mt4 = TransitionConfig(
-        kind="device_threshold", mapped_threshold=4, reserved_threshold=-1)
-    # Higher mt: trigger fires when any GPU has < N mapped tasks → scheduler while-loop
-    # runs N times per event → fills GPU queue with N tasks via N committed iterations.
-    tc_darts_mt8 = TransitionConfig(
-        kind="device_threshold", mapped_threshold=8, reserved_threshold=-1)
-    tc_darts_mt16 = TransitionConfig(
-        kind="device_threshold", mapped_threshold=16, reserved_threshold=-1)
-
-    # DARTSPipeline is the correct pairing for pipeline-depth mode.
-    # DARTSAdaptive is an alternative reactive trigger compatible with either mode.
-    tc_pipeline_d4 = TransitionConfig(
-        kind="darts_pipeline", pipeline_depth=4, max_in_flight=64, pipeline_starvation=1)
-    tc_adaptive = TransitionConfig(
-        kind="darts_adaptive", reserved_threshold=0,
-        max_in_flight=64, pipeline_starvation=1)
+    # PlannedThreshold is the new DARTS pairing.
+    tc_darts_planned_1 = TransitionConfig(kind="planned", planned_threshold=1)
+    tc_darts_planned_2 = TransitionConfig(kind="planned", planned_threshold=2)
+    tc_darts_planned_4 = TransitionConfig(kind="planned", planned_threshold=4)
 
     configs = [
         # ── Baselines ────────────────────────────────────────────────────────
         ("EFT+hysteresis [baseline]",
          fastsim.DequeueEFTMapper(), "dequeue_eft", tc_hysteresis),
 
-        # EFT with DeviceThreshold TC: upper bound for DARTS-TC style scheduling
-        ("EFT+device_threshold(mt=0)",
-         fastsim.DequeueEFTMapper(), "dequeue_eft", tc_darts_mt0),
+        # EFT with planned transition for apples-to-apples trigger behavior.
+        ("EFT+planned(th=1)",
+         fastsim.DequeueEFTMapper(), "dequeue_eft", tc_darts_planned_1),
 
         ("MemAwareEFT+hysteresis",
          fastsim.MemoryAwareEFTMapper(), "memory_aware_eft", tc_hysteresis),
 
-        # ── DARTS threshold mode (mt=0): correct pairing = DeviceThreshold ──
-        ("DARTS(mt=0,ext2) [DEFAULT]",
-         make_darts_mapper(DARTSConfig()), "darts", tc_darts_mt0),
-
-        ("DARTS(mt=0,noext)",
-         make_darts_mapper(DARTSConfig(extended_frontier=False, extended_batch=False)),
-         "darts", tc_darts_mt0),
-
-        ("DARTS(mt=0,ext2,ft_aware)",
-         make_darts_mapper(DARTSConfig(finish_time_aware=True)), "darts", tc_darts_mt0),
-
-        # ── Push-pipeline DARTS: key push-model adaptation ──────────────────────
-        # push_pipeline_depth=N: fill each GPU's queue with N independently-chosen
-        # blocks per trigger (IWC forced on → no N-fold data duplication).
-        # This is the direct translation of StarPU's planned_task[] fill loop.
-        ("DARTS(push_pipe=4)",
-         make_darts_mapper(DARTSConfig(push_pipeline_depth=4)),
-         "darts", tc_darts_mt0),
-
-        ("DARTS(push_pipe=8)",
-         make_darts_mapper(DARTSConfig(push_pipeline_depth=8)),
-         "darts", tc_darts_mt0),
-
-        ("DARTS(push_pipe=16)",
-         make_darts_mapper(DARTSConfig(push_pipeline_depth=16)),
-         "darts", tc_darts_mt0),
-
-        ("DARTS(push_pipe=16,sim_mem)",
-         make_darts_mapper(DARTSConfig(push_pipeline_depth=16, simulate_memory=True)),
-         "darts", tc_darts_mt0),
-
-        # Classical StarPU DARTS: one device per trigger (pull-model faithful).
-        ("DARTS(single_dev)",
-         make_darts_mapper(DARTSConfig(single_device_per_trigger=True)),
-         "darts", tc_darts_mt0),
-
-        ("DARTS(single_dev,iwc,ft_aware)",
-         make_darts_mapper(DARTSConfig(single_device_per_trigger=True,
-                                       intra_window_coordination=True,
-                                       finish_time_aware=True)),
-         "darts", tc_darts_mt0),
-
-        # global_eft_batch with higher mt: triggers the scheduler's while-loop N times,
-        # each iteration committing state so subsequent iterations see updated data
-        # locality.  This fills the GPU pipeline via N committed mapping rounds.
-        ("DARTS(global_eft_batch,mt=8)",
-         make_darts_mapper(DARTSConfig(global_eft_batch=True, global_eft_batch_cap=1)),
-         "darts", tc_darts_mt8),
-
-        ("DARTS(global_eft_batch,mt=16)",
-         make_darts_mapper(DARTSConfig(global_eft_batch=True, global_eft_batch_cap=1)),
-         "darts", tc_darts_mt16),
-
-        # global_eft_batch: task-first EFT with planned-data tracking (reference mt=0).
-        ("DARTS(global_eft_batch,cap=1)",
-         make_darts_mapper(DARTSConfig(global_eft_batch=True, global_eft_batch_cap=1)),
-         "darts", tc_darts_mt0),
-
-        ("DARTS(mt=4,ext2)",
-         make_darts_mapper(DARTSConfig(mapped_threshold=4)), "darts", tc_darts_mt4),
-
-        # ── DARTS pipeline mode: correct pairing = DARTSPipeline/DARTSAdaptive ──
-        ("DARTS(pipeline_depth=4,ext2)+pipeline_tc",
-         make_darts_mapper(DARTSConfig(pipeline_depth=4, starvation_threshold=1, max_in_flight=64)),
-         "darts", tc_pipeline_d4),
-
-        # NOTE: DARTSAdaptiveTransitionConditions fires when n_reserved(d)==0,
-        # which is true between MAP and RESERVE for every device.  This causes the
-        # same DARTS + hysteresis mismatch (DARTS returns empty, warning fires).
-        # Uncomment only if you pair it with pipeline_depth > 0.
-        # ("DARTS(mt=0,ext2)+adaptive_tc",
-        #  make_darts_mapper(DARTSConfig()), "darts", tc_adaptive),
+        # ── New DARTS mapper: short/medium horizon thresholds ─────────────────
+        ("DARTS(sh=2,mh=4) [DEFAULT]",
+         make_darts_mapper(DARTSConfig(short_horizon_threshold=2, medium_horizon_threshold=4)),
+         "darts", tc_darts_planned_1),
+        ("DARTS(sh=1,mh=2)",
+         make_darts_mapper(DARTSConfig(short_horizon_threshold=1, medium_horizon_threshold=2)),
+         "darts", tc_darts_planned_2),
+        ("DARTS(sh=2,mh=6)",
+         make_darts_mapper(DARTSConfig(short_horizon_threshold=2, medium_horizon_threshold=6)),
+         "darts", tc_darts_planned_2),
+        ("DARTS(sh=4,mh=8)",
+         make_darts_mapper(DARTSConfig(short_horizon_threshold=4, medium_horizon_threshold=8)),
+         "darts", tc_darts_planned_4),
     ]
 
     results = {}

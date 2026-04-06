@@ -292,9 +292,21 @@ def main() -> None:
     parser.add_argument("--processor-cols", type=int, default=None)
     parser.add_argument(
         "--transition-kind",
-        choices=("auto", "default", "batch", "device_threshold", "range"),
+        choices=(
+            "auto",
+            "planned",
+            "planned_threshold",
+            "default",
+            "batch",
+            "device_threshold",
+            "range",
+            "hysteresis",
+            "darts_adaptive",
+            "darts_pipeline",
+        ),
         default="auto",
     )
+    parser.add_argument("--transition-planned-threshold", type=int, default=1)
     parser.add_argument("--transition-batch-size", type=int, default=5)
     parser.add_argument("--transition-queue-threshold", type=int, default=5)
     parser.add_argument("--transition-max-in-flight", type=int, default=None)
@@ -323,6 +335,7 @@ def main() -> None:
     )
     transition_config = TransitionConfig(
         kind=args.transition_kind,
+        planned_threshold=args.transition_planned_threshold,
         batch_size=args.transition_batch_size,
         queue_threshold=args.transition_queue_threshold,
         max_in_flight=args.transition_max_in_flight,

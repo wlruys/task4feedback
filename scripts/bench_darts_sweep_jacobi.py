@@ -105,22 +105,16 @@ def run_darts(
     steps: int,
     seed: int,
     top_k: int,
-    transition_kind: str = "device_threshold",
+    transition_kind: str = "planned",
     max_mapped: Optional[int] = None,
     transfer_aware: bool = False,
-    pipeline_depth: Optional[int] = None,
 ) -> dict:
     set_seed(seed)
     mapper = make_darts_mapper(cfg)
-    tc_kwargs = dict(
+    transition_config = TransitionConfig(
         kind=transition_kind,
-        mapped_threshold=cfg.mapped_threshold,
-        reserved_threshold=cfg.reserved_threshold,
         max_in_flight=max_mapped,
     )
-    if pipeline_depth is not None:
-        tc_kwargs["pipeline_depth"] = pipeline_depth
-    transition_config = TransitionConfig(**tc_kwargs)
     graph_system = build_system(mem=gpu_mem)
     graph = build_graph(
         graph_system,
@@ -172,10 +166,9 @@ def safe_run(
     label: str,
     regime: str,
     *,
-    transition_kind: str = "device_threshold",
+    transition_kind: str = "planned",
     max_mapped: Optional[int] = None,
     transfer_aware: bool = False,
-    pipeline_depth: Optional[int] = None,
     **kwargs,
 ) -> SweepResult:
     try:
@@ -183,7 +176,6 @@ def safe_run(
             transition_kind=transition_kind,
             max_mapped=max_mapped,
             transfer_aware=transfer_aware,
-            pipeline_depth=pipeline_depth,
             **kwargs,
         )
         if result["status"] != ExecutionState.COMPLETE:

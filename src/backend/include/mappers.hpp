@@ -478,9 +478,9 @@ protected:
 
 public:
   double alpha = 1.0;
-  MemoryAwareLocationState eviction_cost_location_state = MemoryAwareLocationState::LAUNCHED;
-  MemoryAwareOverflowState overflow_state = MemoryAwareOverflowState::LAUNCHED;
-  MemoryAwareOverflowMode overflow_mode = MemoryAwareOverflowMode::FULL_SPILL;
+  MemoryAwareLocationState eviction_cost_location_state = MemoryAwareLocationState::RESERVED;
+  MemoryAwareOverflowState overflow_state = MemoryAwareOverflowState::RESERVED;
+  MemoryAwareOverflowMode overflow_mode = MemoryAwareOverflowMode::INCOMING_ONLY;
 
   MemoryAwareEFTMapper() = default;
   MemoryAwareEFTMapper(const MemoryAwareEFTMapper &) = default;
@@ -1532,8 +1532,8 @@ private:
   struct Config {
     uint32_t short_horizon_threshold;
     uint32_t medium_horizon_threshold;
-    bool emit_short_horizon = false;
-    bool emit_medium_horizon = false;
+    bool emit_short_horizon = true;
+    bool emit_medium_horizon = true;
     uint32_t short_horizon_k = 4;
     uint32_t medium_horizon_k = 4;
 
@@ -1606,6 +1606,8 @@ private:
 
   Scratch scratch_;
   Config config_;
+  mutable std::mt19937 rng_{std::random_device{}()};
+  mutable std::vector<devid_t> device_order_;
 
   void validate_config() const {
     T4F_INVARIANT(config_.short_horizon_threshold >= 1);
@@ -1824,21 +1826,23 @@ private:
   [[nodiscard]] devid_t choose_target_device(const SchedulerState& state) const {
     const auto& topology = state.get_topology();
     const auto& devices = state.get_devices();
+    const auto n_devices = static_cast<devid_t>(topology.num_devices);
+
+    // Build GPU device list once, then shuffle to break ties fairly.
+    device_order_.clear();
+    for (devid_t d = 0; d < n_devices; ++d) {
+      if (devices.get_type(d) == DeviceType::GPU) {
+        device_order_.push_back(d);
+      }
+    }
+    std::shuffle(device_order_.begin(), device_order_.end(), rng_);
 
     devid_t best_device = -1;
     timecount_t best_load = MAX_TIME;
 
-    for (devid_t device_id = 0;
-         device_id < static_cast<devid_t>(topology.num_devices);
-         ++device_id) {
-
-      if (devices.get_type(device_id) != DeviceType::GPU) {
-        continue;
-      }
-
+    for (const devid_t device_id : device_order_) {
       const timecount_t load = state.costs.get_mapped_time(device_id);
-      if (best_device < 0 || load < best_load ||
-          (load == best_load && device_id < best_device)) {
+      if (best_device < 0 || load < best_load) {
         best_device = device_id;
         best_load = load;
       }
@@ -2150,43 +2154,43 @@ private:
           task_ids.size(), device_id, best_priority_fallback != kNoTask);
     }
 
-    // SPDLOG_INFO("DARTSMapping round for device {}: emitting {} actions, n_candidates: {}", device_id, action_buffer.size(), scratch_.candidates.size());
-    // for (devid_t d = 1; d < static_cast<devid_t>(state.get_topology().num_devices); ++d) {
-    //   SPDLOG_INFO("  [device {}] N_mapped / n_reserved / n_launchable: {} / {} / {}",
-    //               d,
-    //               state.counts.n_mapped(d),
-    //               state.counts.n_reserved(d),
-    //               state.counts.n_launched(d));
-    // }
-    // SPDLOG_INFO("Frontier states: ready_after_one_count={}, short_horizon_count={}, medium_horizon_count={}, long_horizon_count={}",
-    //             best_frontier != nullptr ? best_frontier->ready_after_one_count : 0,
-    //             best_frontier != nullptr ? best_frontier->short_horizon_count : 0,
-    //             best_frontier != nullptr ? best_frontier->medium_horizon_count : 0,
-    //             best_frontier != nullptr ? best_frontier->long_horizon_count : 0);
-    // SPDLOG_INFO("Best frontier entry: data_id={}, transfer_possible={}, transfer_time={}, best_ready_after_one_task={}, best_short_horizon_task={}, best_medium_horizon_task={}, best_long_horizon_task={}",
-    //             best_frontier != nullptr ? best_frontier->data_id : -1,
-    //             best_frontier != nullptr ? best_frontier->transfer_possible : false,
-    //             best_frontier != nullptr ? best_frontier->transfer_time : MAX_TIME,
-    //             best_frontier != nullptr ? best_frontier->best_ready_after_one_task : kNoTask,
-    //             best_frontier != nullptr ? best_frontier->best_short_horizon_task : kNoTask,
-    //             best_frontier != nullptr ? best_frontier->best_medium_horizon_task : kNoTask,
-    //             best_frontier != nullptr ? best_frontier->best_long_horizon_task : kNoTask);
-    // for (const auto& action : action_buffer) {
-    //   if (action.pos >= scratch_.candidates.size()) {
-    //     SPDLOG_WARN("DARTSMapper emitted action with out-of-range pos: pos={}, candidates_size={}"
-    //                 ", device={}",
-    //                 action.pos, scratch_.candidates.size(), action.device);
-    //     continue;
-    //   }
+    SPDLOG_INFO("DARTSMapping round for device {}: emitting {} actions, n_candidates: {}", device_id, action_buffer.size(), scratch_.candidates.size());
+    for (devid_t d = 1; d < static_cast<devid_t>(state.get_topology().num_devices); ++d) {
+      SPDLOG_INFO("  [device {}] N_mapped / n_reserved / n_launchable: {} / {} / {}",
+                  d,
+                  state.counts.n_mapped(d),
+                  state.counts.n_reserved(d),
+                  state.counts.n_launched(d));
+    }
+    SPDLOG_INFO("Frontier states: ready_after_one_count={}, short_horizon_count={}, medium_horizon_count={}, long_horizon_count={}",
+                best_frontier != nullptr ? best_frontier->ready_after_one_count : 0,
+                best_frontier != nullptr ? best_frontier->short_horizon_count : 0,
+                best_frontier != nullptr ? best_frontier->medium_horizon_count : 0,
+                best_frontier != nullptr ? best_frontier->long_horizon_count : 0);
+    SPDLOG_INFO("Best frontier entry: data_id={}, transfer_possible={}, transfer_time={}, best_ready_after_one_task={}, best_short_horizon_task={}, best_medium_horizon_task={}, best_long_horizon_task={}",
+                best_frontier != nullptr ? best_frontier->data_id : -1,
+                best_frontier != nullptr ? best_frontier->transfer_possible : false,
+                best_frontier != nullptr ? best_frontier->transfer_time : MAX_TIME,
+                best_frontier != nullptr ? best_frontier->best_ready_after_one_task : kNoTask,
+                best_frontier != nullptr ? best_frontier->best_short_horizon_task : kNoTask,
+                best_frontier != nullptr ? best_frontier->best_medium_horizon_task : kNoTask,
+                best_frontier != nullptr ? best_frontier->best_long_horizon_task : kNoTask);
+    for (const auto& action : action_buffer) {
+      if (action.pos >= scratch_.candidates.size()) {
+        SPDLOG_WARN("DARTSMapper emitted action with out-of-range pos: pos={}, candidates_size={}"
+                    ", device={}",
+                    action.pos, scratch_.candidates.size(), action.device);
+        continue;
+      }
 
-    //   SPDLOG_INFO("Emitting action: task_id={}, pos={}, device={}, reservable_priority={}"
-    //               ", launchable_priority={}",
-    //               scratch_.candidates[action.pos].task_id,
-    //               action.pos,
-    //               action.device,
-    //               action.reservable_priority,
-    //               action.launchable_priority);
-    // }
+      SPDLOG_INFO("Emitting action: task_id={}, pos={}, device={}, reservable_priority={}"
+                  ", launchable_priority={}",
+                  scratch_.candidates[action.pos].task_id,
+                  action.pos,
+                  action.device,
+                  action.reservable_priority,
+                  action.launchable_priority);
+    }
 
     return action_buffer;
   }
@@ -2277,8 +2281,8 @@ private:
     Config() noexcept
         : short_horizon_threshold(4),
           medium_horizon_threshold(8),
-          emit_short_horizon(false),
-          emit_medium_horizon(false),
+          emit_short_horizon(true),
+          emit_medium_horizon(true),
           short_horizon_k(4),
           medium_horizon_k(4),
           finish_time_aware(true),
@@ -2341,6 +2345,8 @@ private:
 
   Scratch scratch_;
   Config config_;
+  mutable std::mt19937 rng_{std::random_device{}()};
+  mutable std::vector<devid_t> device_order_;
 
 private:
   void validate_config() const {
@@ -2559,17 +2565,21 @@ private:
     const auto& devices = state.get_devices();
     const auto n_devices = static_cast<devid_t>(devices.size());
 
+    // Build GPU device list once, then shuffle to break ties fairly.
+    device_order_.clear();
+    for (devid_t d = 0; d < n_devices; ++d) {
+      if (devices.get_type(d) == DeviceType::GPU) {
+        device_order_.push_back(d);
+      }
+    }
+    std::shuffle(device_order_.begin(), device_order_.end(), rng_);
+
     devid_t best_device = -1;
     timecount_t best_load = MAX_TIME;
 
-    for (devid_t device_id = 0; device_id < n_devices; ++device_id) {
-      if (devices.get_type(device_id) != DeviceType::GPU) {
-        continue;
-      }
-
+    for (const devid_t device_id : device_order_) {
       const timecount_t load = state.costs.get_mapped_time(device_id);
-      if (best_device < 0 || load < best_load ||
-          (load == best_load && device_id < best_device)) {
+      if (best_device < 0 || load < best_load) {
         best_device = device_id;
         best_load = load;
       }

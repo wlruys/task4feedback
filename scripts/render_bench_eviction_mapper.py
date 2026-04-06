@@ -114,11 +114,11 @@ def _reset_initial_cell_locations(graph) -> None:
 def _make_transition_config(args: argparse.Namespace) -> TransitionConfig:
     return TransitionConfig(
         kind=args.transition_kind,
+        planned_threshold=args.transition_planned_threshold,
+        max_reserved_threshold=args.transition_max_reserved_threshold,
         batch_size=args.transition_batch_size,
         queue_threshold=args.transition_queue_threshold,
         max_in_flight=args.transition_max_in_flight,
-        mapped_threshold=args.transition_mapped_threshold,
-        reserved_threshold=args.transition_reserved_threshold,
         mapped_reserved_gap=args.transition_mapped_reserved_gap,
         reserved_launched_gap=args.transition_reserved_launched_gap,
         total_in_flight=args.transition_total_in_flight,
@@ -420,14 +420,14 @@ def build_parser(
     parser.add_argument("--gpu-mem-gb", type=float, default=jacobi_bench.GPU_MEM / 1e9)
     parser.add_argument(
         "--transition-kind",
-        choices=("auto", "default", "batch", "device_threshold", "range"),
+        choices=("auto", "planned", "default", "batch", "range", "hysteresis"),
         default="auto",
     )
+    parser.add_argument("--transition-planned-threshold", type=int, default=1)
+    parser.add_argument("--transition-max-reserved-threshold", type=int, default=16)
     parser.add_argument("--transition-batch-size", type=int, default=5)
     parser.add_argument("--transition-queue-threshold", type=int, default=5)
     parser.add_argument("--transition-max-in-flight", type=int, default=None)
-    parser.add_argument("--transition-mapped-threshold", type=int, default=0)
-    parser.add_argument("--transition-reserved-threshold", type=int, default=-1)
     parser.add_argument("--transition-mapped-reserved-gap", type=int, default=5)
     parser.add_argument("--transition-reserved-launched-gap", type=int, default=5)
     parser.add_argument("--transition-total-in-flight", type=int, default=None)
