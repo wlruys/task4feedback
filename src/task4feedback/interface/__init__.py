@@ -24,7 +24,7 @@ from .wrappers import (
     TaskNoise,
     RangeTransitionConditions,
     DefaultTransitionConditions,
-    DeviceThresholdTransitionConditions,
+    PlannedThresholdTransitionConditions,
     HysteresisTransitionConditions,
     uniform_connected_devices,
     start_logger,

@@ -66,44 +66,37 @@ void init_scheduler_ext(nb::module_ &m) {
 
   nb::class_<TransitionConditions>(m, "TransitionConditions")
       .def("should_map", &TransitionConditions::should_map)
+      .def("update_map", &TransitionConditions::update_map)
       .def("should_reserve", &TransitionConditions::should_reserve)
-      .def("should_launch", &TransitionConditions::should_launch);
+      .def("should_launch", &TransitionConditions::should_launch)
+      .def("should_launch_data", &TransitionConditions::should_launch_data);
 
   nb::class_<DefaultTransitionConditions, TransitionConditions>(m, "DefaultTransitionConditions")
       .def(nb::init<>());
 
   nb::class_<RangeTransitionConditions, TransitionConditions>(m, "RangeTransitionConditions")
-      .def(nb::init<int32_t, int32_t, int32_t>(), "mapped_reserved_gap"_a,
-           "reserved_launched_gap"_a, "total_in_flight"_a)
+        .def(nb::init<int32_t, int32_t, int32_t>(), "mapped_reserved_gap"_a = 1,
+              "reserved_launched_gap"_a = 1, "total_in_flight"_a = 1)
       .def_rw("mapped_reserved_gap", &RangeTransitionConditions::mapped_reserved_gap)
       .def_rw("reserved_launched_gap", &RangeTransitionConditions::reserved_launched_gap)
       .def_rw("total_in_flight", &RangeTransitionConditions::total_in_flight);
 
   nb::class_<BatchTransitionConditions, TransitionConditions>(m, "BatchTransitionConditions")
-      .def(nb::init<int32_t, int32_t, int32_t>(), "batch_size"_a, "queue_threshold"_a,
-           "max_in_flight"_a)
+        .def(nb::init<int32_t, int32_t, int32_t>(), "batch_size"_a = 20,
+              "queue_threshold"_a = 2, "max_in_flight"_a = 16)
       .def_rw("batch_size", &BatchTransitionConditions::batch_size)
       .def_rw("queue_threshold", &BatchTransitionConditions::queue_threshold)
       .def_rw("max_in_flight", &BatchTransitionConditions::max_in_flight)
       .def_ro("last_accessed", &BatchTransitionConditions::last_accessed)
       .def_ro("active_batch", &BatchTransitionConditions::active_batch);
 
-  nb::class_<DeviceThresholdTransitionConditions, TransitionConditions>(
-      m, "DeviceThresholdTransitionConditions")
-      .def(nb::init<>())
-      .def(nb::init<int32_t, int32_t>(), "mapped_threshold"_a, "reserved_threshold"_a)
-      .def_prop_rw("mapped_threshold", &DeviceThresholdTransitionConditions::get_mapped_threshold,
-                   &DeviceThresholdTransitionConditions::set_mapped_threshold)
-      .def_prop_rw("reserved_threshold",
-                   &DeviceThresholdTransitionConditions::get_reserved_threshold,
-                   &DeviceThresholdTransitionConditions::set_reserved_threshold)
-      .def("set_thresholds", &DeviceThresholdTransitionConditions::set_thresholds,
-           "mapped_threshold"_a, "reserved_threshold"_a)
-      .def("use_mapped_threshold", &DeviceThresholdTransitionConditions::use_mapped_threshold,
-           "mapped_threshold"_a)
-      .def("use_reserved_threshold", &DeviceThresholdTransitionConditions::use_reserved_threshold,
-           "reserved_threshold"_a)
-      .def("disable_thresholds", &DeviceThresholdTransitionConditions::disable_thresholds);
+  nb::class_<PlannedThresholdTransitionConditions, TransitionConditions>(
+      m, "PlannedThresholdTransitionConditions")
+      .def(nb::init<int32_t, int64_t>(), "planned_threshold"_a = 1,
+           "max_reserved_threshold"_a = 16)
+      .def_rw("planned_threshold", &PlannedThresholdTransitionConditions::planned_threshold)
+      .def_rw("max_reserved_threshold",
+              &PlannedThresholdTransitionConditions::max_reserved_threshold);
 
   nb::class_<HysteresisTransitionConditions, TransitionConditions>(
       m, "HysteresisTransitionConditions")
@@ -115,22 +108,4 @@ void init_scheduler_ext(nb::module_ &m) {
       .def_rw("starvation_threshold", &HysteresisTransitionConditions::starvation_threshold)
       .def_ro("last_window_opened", &HysteresisTransitionConditions::last_window_opened)
       .def_ro("window_open", &HysteresisTransitionConditions::window_open);
-
-  nb::class_<DARTSAdaptiveTransitionConditions, TransitionConditions>(
-      m, "DARTSAdaptiveTransitionConditions")
-      .def(nb::init<>())
-      .def(nb::init<int32_t, int32_t, int32_t>(), "reserved_threshold"_a, "max_mapped"_a,
-           "starvation_threshold"_a = 1)
-      .def_rw("reserved_threshold", &DARTSAdaptiveTransitionConditions::reserved_threshold)
-      .def_rw("max_mapped", &DARTSAdaptiveTransitionConditions::max_mapped)
-      .def_rw("starvation_threshold", &DARTSAdaptiveTransitionConditions::starvation_threshold);
-
-  nb::class_<DARTSPipelineTransitionConditions, TransitionConditions>(
-      m, "DARTSPipelineTransitionConditions")
-      .def(nb::init<>())
-      .def(nb::init<int32_t, int32_t, int32_t>(), "pipeline_depth"_a, "max_in_flight"_a,
-           "starvation_threshold"_a = 1)
-      .def_rw("pipeline_depth", &DARTSPipelineTransitionConditions::pipeline_depth)
-      .def_rw("max_in_flight", &DARTSPipelineTransitionConditions::max_in_flight)
-      .def_rw("starvation_threshold", &DARTSPipelineTransitionConditions::starvation_threshold);
 }
