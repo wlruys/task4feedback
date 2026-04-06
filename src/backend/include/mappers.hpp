@@ -558,537 +558,7 @@ public:
   }
 };
 
-class DataAwareMapper : public Mapper {
-private:
-  struct TaskRec {
-    taskid_t task_id = -1;
-    std::size_t input_pos = 0;
-    priority_t priority = 0;
-    DeviceIDList supported_devices;
-    std::vector<int32_t> read_data_indices;
-    std::vector<int32_t> unique_data_indices;
-    bool active = true;
-  };
 
-  struct DataRec {
-    dataid_t data_id = -1;
-    std::vector<int32_t> reader_task_indices;
-    std::vector<int32_t> planned_count;
-    std::vector<uint8_t> local_present;
-  };
-
-  struct DevicePlan {
-    std::vector<int32_t> planned_task_indices;
-    std::vector<int32_t> frontier_data_indices;
-  };
-
-  struct DataChoice {
-    bool valid = false;
-    int32_t data_index = -1;
-    int32_t newly_free_count = 0;
-    priority_t newly_free_priority_sum = 0;
-    timecount_t transfer_time = MAX_TIME;
-    dataid_t data_id = -1;
-  };
-
-  struct Proposal {
-    bool valid = false;
-    int32_t task_index = -1;
-    devid_t device_id = -1;
-    int32_t newly_free_count = 0;
-    timecount_t transfer_time = MAX_TIME;
-    priority_t priority = 0;
-    taskid_t task_id = -1;
-  };
-
-  [[nodiscard]] static bool device_has_data(devicemask_t location_flags, devid_t device_id) {
-    using UMask = std::make_unsigned_t<devicemask_t>;
-    constexpr std::size_t mask_bits = std::numeric_limits<UMask>::digits;
-    if (device_id < 0 || static_cast<std::size_t>(device_id) >= mask_bits) {
-      return false;
-    }
-    const auto mask = static_cast<UMask>(location_flags);
-    const auto bit = static_cast<UMask>(UMask{1} << static_cast<std::size_t>(device_id));
-    return (mask & bit) != 0;
-  }
-
-  [[nodiscard]] static devicemask_t device_bit(devid_t device_id) {
-    using UMask = std::make_unsigned_t<devicemask_t>;
-    constexpr std::size_t mask_bits = std::numeric_limits<UMask>::digits;
-    if (device_id < 0 || static_cast<std::size_t>(device_id) >= mask_bits) {
-      return 0;
-    }
-    return static_cast<devicemask_t>(UMask{1} << static_cast<std::size_t>(device_id));
-  }
-
-  ActionList &plan_tasks(std::span<const taskid_t> task_ids, const SchedulerState &state) {
-    const auto &static_graph = state.get_tasks();
-    const auto &data_manager = state.get_data_manager();
-    const auto &communication_manager = state.get_communication_manager();
-    const auto &topology = state.get_topology();
-    const auto n_devices = static_cast<std::size_t>(state.get_devices().size());
-
-    action_buffer.clear();
-    action_buffer.reserve(task_ids.size());
-    if (task_ids.empty()) {
-      return action_buffer;
-    }
-
-    std::vector<TaskRec> task_records;
-    task_records.reserve(task_ids.size());
-
-    ankerl::unordered_dense::map<dataid_t, int32_t> data_index;
-    data_index.reserve(task_ids.size() * 4);
-
-    std::vector<DataRec> data_records;
-    data_records.reserve(task_ids.size() * 4);
-
-    auto get_or_create_data = [&](dataid_t data_id) -> int32_t {
-      const auto it = data_index.find(data_id);
-      if (it != data_index.end()) {
-        return it->second;
-      }
-
-      const auto idx = static_cast<int32_t>(data_records.size());
-      data_index.emplace(data_id, idx);
-      DataRec rec;
-      rec.data_id = data_id;
-      rec.planned_count.assign(n_devices, 0);
-      rec.local_present.assign(n_devices, 0);
-      data_records.push_back(std::move(rec));
-      return idx;
-    };
-
-    for (std::size_t input_pos = 0; input_pos < task_ids.size(); ++input_pos) {
-      const auto task_id = task_ids[input_pos];
-      TaskRec rec;
-      rec.task_id = task_id;
-      rec.input_pos = input_pos;
-      rec.priority = state.get_mapping_priority(task_id);
-
-      fill_device_targets(task_id, state);
-      rec.supported_devices = device_buffer;
-      T4F_INVARIANT(!rec.supported_devices.empty());
-
-      const auto task_index = static_cast<int32_t>(task_records.size());
-      for (const auto data_id : static_graph.get_read(task_id)) {
-        const auto data_idx = get_or_create_data(data_id);
-        rec.read_data_indices.push_back(data_idx);
-      }
-
-      for (const auto data_id : static_graph.get_unique(task_id)) {
-        const auto it = data_index.find(data_id);
-        if (it != data_index.end()) {
-          rec.unique_data_indices.push_back(it->second);
-        }
-      }
-
-      task_records.push_back(std::move(rec));
-      for (const auto data_idx : task_records.back().read_data_indices) {
-        data_records[static_cast<std::size_t>(data_idx)].reader_task_indices.push_back(task_index);
-      }
-    }
-
-    std::vector<DevicePlan> device_plans(n_devices);
-    for (const auto &task_rec : task_records) {
-      for (const auto device_id : task_rec.supported_devices) {
-        auto &frontier =
-            device_plans[static_cast<std::size_t>(device_id)].frontier_data_indices;
-        frontier.insert(frontier.end(), task_rec.read_data_indices.begin(),
-                        task_rec.read_data_indices.end());
-      }
-    }
-
-    for (auto &plan : device_plans) {
-      std::sort(plan.frontier_data_indices.begin(), plan.frontier_data_indices.end());
-      plan.frontier_data_indices.erase(
-          std::unique(plan.frontier_data_indices.begin(), plan.frontier_data_indices.end()),
-          plan.frontier_data_indices.end());
-    }
-
-    auto task_supports_device = [](const TaskRec &task_rec, devid_t device_id) {
-      return std::binary_search(task_rec.supported_devices.begin(),
-                                task_rec.supported_devices.end(), device_id);
-    };
-
-    auto effective_location_flags = [&](int32_t data_idx) {
-      const auto &data_rec = data_records[static_cast<std::size_t>(data_idx)];
-      auto flags = data_manager.get_mapped_location_flags(data_rec.data_id);
-      for (std::size_t device = 0; device < n_devices; ++device) {
-        if (data_rec.local_present[device]) {
-          flags = static_cast<devicemask_t>(
-              flags | device_bit(static_cast<devid_t>(device)));
-        }
-      }
-      return flags;
-    };
-
-    auto is_local_on_device = [&](int32_t data_idx, devid_t device_id) {
-      const auto &data_rec = data_records[static_cast<std::size_t>(data_idx)];
-      const auto device_index = static_cast<std::size_t>(device_id);
-      return device_has_data(data_manager.get_mapped_location_flags(data_rec.data_id), device_id) ||
-             data_rec.local_present[device_index] != 0;
-    };
-
-    auto transfer_time_for = [&](int32_t data_idx, devid_t device_id) {
-      if (is_local_on_device(data_idx, device_id)) {
-        return timecount_t{0};
-      }
-
-      const auto &data_rec = data_records[static_cast<std::size_t>(data_idx)];
-      const auto flags = effective_location_flags(data_idx);
-      const mem_t data_size = state.get_data().get_size(data_rec.data_id);
-      const auto req = communication_manager.get_best_source(topology, device_id, flags);
-      T4F_INVARIANT(req.found);
-      return communication_manager.ideal_time_to_transfer(topology, data_size, req.source,
-                                                          device_id);
-    };
-
-    auto total_transfer_time = [&](const TaskRec &task_rec, devid_t device_id) {
-      timecount_t total = 0;
-      for (const auto data_idx : task_rec.read_data_indices) {
-        total += transfer_time_for(data_idx, device_id);
-      }
-      return total;
-    };
-
-    auto count_local_reads = [&](const TaskRec &task_rec, devid_t device_id) {
-      int32_t total = 0;
-      for (const auto data_idx : task_rec.read_data_indices) {
-        total += static_cast<int32_t>(is_local_on_device(data_idx, device_id));
-      }
-      return total;
-    };
-
-    auto is_task_free = [&](const TaskRec &task_rec, devid_t device_id) {
-      for (const auto data_idx : task_rec.read_data_indices) {
-        if (!is_local_on_device(data_idx, device_id)) {
-          return false;
-        }
-      }
-      return true;
-    };
-
-    auto would_be_free_if_data_present =
-        [&](const TaskRec &task_rec, devid_t device_id, int32_t data_idx) {
-          if (!task_supports_device(task_rec, device_id) || is_task_free(task_rec, device_id)) {
-            return false;
-          }
-
-          bool uses_data = false;
-          for (const auto read_idx : task_rec.read_data_indices) {
-            if (read_idx == data_idx) {
-              uses_data = true;
-              continue;
-            }
-            if (!is_local_on_device(read_idx, device_id)) {
-              return false;
-            }
-          }
-          return uses_data;
-        };
-
-    auto better_seed_task =
-        [&](int32_t lhs_index, int32_t rhs_index, devid_t device_id) {
-          if (rhs_index < 0) {
-            return true;
-          }
-          const auto &lhs = task_records[static_cast<std::size_t>(lhs_index)];
-          const auto &rhs = task_records[static_cast<std::size_t>(rhs_index)];
-          const auto lhs_local = count_local_reads(lhs, device_id);
-          const auto rhs_local = count_local_reads(rhs, device_id);
-          if (lhs_local != rhs_local) {
-            return lhs_local > rhs_local;
-          }
-          const auto lhs_transfer = total_transfer_time(lhs, device_id);
-          const auto rhs_transfer = total_transfer_time(rhs, device_id);
-          if (lhs_transfer != rhs_transfer) {
-            return lhs_transfer < rhs_transfer;
-          }
-          if (lhs.priority != rhs.priority) {
-            return lhs.priority > rhs.priority;
-          }
-          return lhs.task_id < rhs.task_id;
-        };
-
-    auto best_seed_task_for_device = [&](devid_t device_id) {
-      int32_t best_index = -1;
-      for (std::size_t i = 0; i < task_records.size(); ++i) {
-        const auto &task_rec = task_records[i];
-        if (!task_rec.active || !task_supports_device(task_rec, device_id)) {
-          continue;
-        }
-        if (better_seed_task(static_cast<int32_t>(i), best_index, device_id)) {
-          best_index = static_cast<int32_t>(i);
-        }
-      }
-      return best_index;
-    };
-
-    auto best_free_task_for_device = [&](devid_t device_id) {
-      int32_t best_index = -1;
-      for (std::size_t i = 0; i < task_records.size(); ++i) {
-        const auto &task_rec = task_records[i];
-        if (!task_rec.active || !task_supports_device(task_rec, device_id) ||
-            !is_task_free(task_rec, device_id)) {
-          continue;
-        }
-
-        if (best_index < 0) {
-          best_index = static_cast<int32_t>(i);
-          continue;
-        }
-
-        const auto &best_task = task_records[static_cast<std::size_t>(best_index)];
-        if (task_rec.priority != best_task.priority) {
-          if (task_rec.priority > best_task.priority) {
-            best_index = static_cast<int32_t>(i);
-          }
-          continue;
-        }
-
-        const auto task_transfer = total_transfer_time(task_rec, device_id);
-        const auto best_transfer = total_transfer_time(best_task, device_id);
-        if (task_transfer != best_transfer) {
-          if (task_transfer < best_transfer) {
-            best_index = static_cast<int32_t>(i);
-          }
-          continue;
-        }
-
-        if (task_rec.task_id < best_task.task_id) {
-          best_index = static_cast<int32_t>(i);
-        }
-      }
-      return best_index;
-    };
-
-    auto best_data_choice_for_device = [&](devid_t device_id) {
-      DataChoice best;
-      const auto device_index = static_cast<std::size_t>(device_id);
-      for (const auto data_idx : device_plans[device_index].frontier_data_indices) {
-        if (is_local_on_device(data_idx, device_id)) {
-          continue;
-        }
-
-        const auto &data_rec = data_records[static_cast<std::size_t>(data_idx)];
-        DataChoice current;
-        current.valid = true;
-        current.data_index = data_idx;
-        current.transfer_time = transfer_time_for(data_idx, device_id);
-        current.data_id = data_rec.data_id;
-
-        for (const auto task_index : data_rec.reader_task_indices) {
-          const auto &task_rec = task_records[static_cast<std::size_t>(task_index)];
-          if (!task_rec.active) {
-            continue;
-          }
-          if (would_be_free_if_data_present(task_rec, device_id, data_idx)) {
-            ++current.newly_free_count;
-            current.newly_free_priority_sum += task_rec.priority;
-          }
-        }
-
-        if (current.newly_free_count == 0) {
-          continue;
-        }
-
-        if (!best.valid || current.newly_free_count > best.newly_free_count ||
-            (current.newly_free_count == best.newly_free_count &&
-             current.transfer_time < best.transfer_time) ||
-            (current.newly_free_count == best.newly_free_count &&
-             current.transfer_time == best.transfer_time &&
-             current.newly_free_priority_sum > best.newly_free_priority_sum) ||
-            (current.newly_free_count == best.newly_free_count &&
-             current.transfer_time == best.transfer_time &&
-             current.newly_free_priority_sum == best.newly_free_priority_sum &&
-             current.data_id < best.data_id)) {
-          best = current;
-        }
-      }
-      return best;
-    };
-
-    auto best_task_for_data_choice = [&](const DataChoice &choice, devid_t device_id) {
-      int32_t best_index = -1;
-      const auto &data_rec = data_records[static_cast<std::size_t>(choice.data_index)];
-      for (const auto task_index : data_rec.reader_task_indices) {
-        const auto &task_rec = task_records[static_cast<std::size_t>(task_index)];
-        if (!task_rec.active ||
-            !would_be_free_if_data_present(task_rec, device_id, choice.data_index)) {
-          continue;
-        }
-
-        if (best_index < 0) {
-          best_index = task_index;
-          continue;
-        }
-
-        const auto &best_task = task_records[static_cast<std::size_t>(best_index)];
-        if (task_rec.priority != best_task.priority) {
-          if (task_rec.priority > best_task.priority) {
-            best_index = task_index;
-          }
-          continue;
-        }
-
-        const auto task_transfer = total_transfer_time(task_rec, device_id);
-        const auto best_transfer = total_transfer_time(best_task, device_id);
-        if (task_transfer != best_transfer) {
-          if (task_transfer < best_transfer) {
-            best_index = task_index;
-          }
-          continue;
-        }
-
-        if (task_rec.task_id < best_task.task_id) {
-          best_index = task_index;
-        }
-      }
-      return best_index;
-    };
-
-    auto proposal_for_device = [&](devid_t device_id) {
-      Proposal proposal;
-      const auto device_index = static_cast<std::size_t>(device_id);
-
-      if (device_plans[device_index].planned_task_indices.empty()) {
-        const auto seed_task = best_seed_task_for_device(device_id);
-        if (seed_task >= 0) {
-          const auto &task_rec = task_records[static_cast<std::size_t>(seed_task)];
-          proposal.valid = true;
-          proposal.task_index = seed_task;
-          proposal.device_id = device_id;
-          proposal.newly_free_count = 1;
-          proposal.transfer_time = total_transfer_time(task_rec, device_id);
-          proposal.priority = task_rec.priority;
-          proposal.task_id = task_rec.task_id;
-        }
-        return proposal;
-      }
-
-      const auto free_task = best_free_task_for_device(device_id);
-      if (free_task >= 0) {
-        const auto &task_rec = task_records[static_cast<std::size_t>(free_task)];
-        proposal.valid = true;
-        proposal.task_index = free_task;
-        proposal.device_id = device_id;
-        proposal.newly_free_count = 0;
-        proposal.transfer_time = total_transfer_time(task_rec, device_id);
-        proposal.priority = task_rec.priority;
-        proposal.task_id = task_rec.task_id;
-        return proposal;
-      }
-
-      const auto data_choice = best_data_choice_for_device(device_id);
-      if (data_choice.valid) {
-        const auto task_index = best_task_for_data_choice(data_choice, device_id);
-        if (task_index >= 0) {
-          const auto &task_rec = task_records[static_cast<std::size_t>(task_index)];
-          proposal.valid = true;
-          proposal.task_index = task_index;
-          proposal.device_id = device_id;
-          proposal.newly_free_count = data_choice.newly_free_count;
-          proposal.transfer_time = total_transfer_time(task_rec, device_id);
-          proposal.priority = task_rec.priority;
-          proposal.task_id = task_rec.task_id;
-          return proposal;
-        }
-      }
-
-      const auto fallback_task = best_seed_task_for_device(device_id);
-      if (fallback_task >= 0) {
-        const auto &task_rec = task_records[static_cast<std::size_t>(fallback_task)];
-        proposal.valid = true;
-        proposal.task_index = fallback_task;
-        proposal.device_id = device_id;
-        proposal.newly_free_count = 0;
-        proposal.transfer_time = total_transfer_time(task_rec, device_id);
-        proposal.priority = task_rec.priority;
-        proposal.task_id = task_rec.task_id;
-      }
-      return proposal;
-    };
-
-    auto better_global_proposal = [](const Proposal &lhs, const Proposal &rhs) {
-      if (!rhs.valid) {
-        return lhs.valid;
-      }
-      if (!lhs.valid) {
-        return false;
-      }
-      if (lhs.priority != rhs.priority) {
-        return lhs.priority > rhs.priority;
-      }
-      if (lhs.newly_free_count != rhs.newly_free_count) {
-        return lhs.newly_free_count > rhs.newly_free_count;
-      }
-      if (lhs.transfer_time != rhs.transfer_time) {
-        return lhs.transfer_time < rhs.transfer_time;
-      }
-      if (lhs.device_id != rhs.device_id) {
-        return lhs.device_id < rhs.device_id;
-      }
-      return lhs.task_id < rhs.task_id;
-    };
-
-    while (action_buffer.size() < task_records.size()) {
-      Proposal best_proposal;
-      for (std::size_t device = 0; device < n_devices; ++device) {
-        const auto current = proposal_for_device(static_cast<devid_t>(device));
-        if (better_global_proposal(current, best_proposal)) {
-          best_proposal = current;
-        }
-      }
-
-      T4F_INVARIANT(best_proposal.valid);
-      auto &task_rec = task_records[static_cast<std::size_t>(best_proposal.task_index)];
-      task_rec.active = false;
-
-      const auto device_index = static_cast<std::size_t>(best_proposal.device_id);
-      device_plans[device_index].planned_task_indices.push_back(best_proposal.task_index);
-
-      for (const auto data_idx : task_rec.read_data_indices) {
-        auto &data_rec = data_records[static_cast<std::size_t>(data_idx)];
-        ++data_rec.planned_count[device_index];
-        data_rec.local_present[device_index] = 1;
-      }
-
-      for (const auto data_idx : task_rec.unique_data_indices) {
-        data_records[static_cast<std::size_t>(data_idx)].local_present[device_index] = 1;
-      }
-
-      action_buffer.push_back(
-          Action{task_rec.input_pos, best_proposal.device_id, task_rec.priority, task_rec.priority});
-    }
-
-    return action_buffer;
-  }
-
-public:
-  DataAwareMapper() = default;
-
-  DataAwareMapper(const DataAwareMapper &other) = default;
-
-  DataAwareMapper(std::size_t n_tasks, std::size_t n_devices) {
-    MONUnusedParameter(n_tasks);
-    MONUnusedParameter(n_devices);
-  }
-
-  Action map_task(taskid_t task_id, const SchedulerState &state) override {
-    auto &actions = plan_tasks(std::span<const taskid_t>(&task_id, 1), state);
-    T4F_INVARIANT(actions.size() == 1);
-    return actions.front();
-  }
-
-  ActionList &map_tasks(std::span<const taskid_t> task_ids, const SchedulerState &state) override {
-    return plan_tasks(task_ids, state);
-  }
-};
-
-// ---------------------------------------------------------------------------
-// PartitioningMapperBase<Derived> -- CRTP base for KaHyParMapper / METISMapper
-// ---------------------------------------------------------------------------
 template <typename Derived>
 class PartitioningMapperBase : public EFTMapper {
 protected:
@@ -1122,8 +592,6 @@ protected:
   std::vector<devid_t> eligible_devices_buffer;
   std::vector<timecount_t> batch_device_available_time;
   ankerl::unordered_dense::map<dataid_t, timecount_t> average_transfer_cost_cache;
-
-  // -- helpers that derived classes may call but never override ---------------
 
   static constexpr timecount_t saturating_add(timecount_t lhs, timecount_t rhs) {
     if (lhs >= MAX_TIME || rhs >= MAX_TIME) {
@@ -1232,9 +700,6 @@ protected:
     static_cast<Derived *>(this)->ensure_scratch_sizes_extra(n_candidates);
   }
 
-  /// Builds candidate_records, task_to_candidate_index, vertex_to_candidate_index
-  /// and populates the GPU-vertex mapping.  The derived class must call
-  /// `prepare_candidates_common()` and then do its own graph-specific init.
   void prepare_candidates_common(std::span<const taskid_t> task_ids,
                                  const SchedulerState &state) {
     clear_candidate_maps();
@@ -1430,7 +895,6 @@ protected:
     }
   }
 
-  /// Fills fallback_candidate_indices with all non-GPU-eligible candidates.
   void collect_fallback_indices(std::vector<int32_t> &fallback_candidate_indices) const {
     fallback_candidate_indices.clear();
     fallback_candidate_indices.reserve(candidate_records.size());
@@ -1441,8 +905,6 @@ protected:
     }
   }
 
-  /// Fills fallback_candidate_indices with ALL candidates (used when partitioning
-  /// is not possible or fails).
   void collect_all_fallback_indices(std::vector<int32_t> &fallback_candidate_indices) const {
     fallback_candidate_indices.clear();
     fallback_candidate_indices.reserve(candidate_records.size());
@@ -1463,9 +925,6 @@ protected:
   }
 };
 
-// ---------------------------------------------------------------------------
-// KaHyParMapper
-// ---------------------------------------------------------------------------
 class KaHyParMapper : public PartitioningMapperBase<KaHyParMapper> {
   friend class PartitioningMapperBase<KaHyParMapper>;
 
@@ -3150,12 +2609,19 @@ public:
   // workloads where DARTS block heuristics underperform.  Orthogonal to
   // finish_time_aware (both can be enabled; global_eft_batch takes priority).
   bool global_eft_batch = false;
-  // Per-device task cap for global_eft_batch.  1 = one task per GPU per trigger
-  // (safe but no pipeline overlap).  Higher values (4-16) enable transfer-compute
-  // pipelining similar to DequeueEFTMapper, at the cost of more in-flight tasks.
-  // The planned-data cascade means data fetched for earlier tasks in the batch is
-  // treated as free for later tasks on the same device.
+  // Per-device task cap for global_eft_batch (selected-devices mode only).
+  // 1 = one task per GPU per trigger (safe default).
+  // Ignored when global_eft_all_devices=true (all candidates are processed).
   int32_t global_eft_batch_cap = 1;
+  // All-devices mode for global_eft_batch: when true, consider ALL devices for
+  // each task (not just idle selected_devices_buffer).  Also persists dev_eft
+  // across triggers via global_eft_eft_buf, exactly matching DequeueEFTMapper's
+  // device_available_time_buffer cascade.  Processes all candidates per trigger.
+  // This is the correct adaptation of EFT scoring to the push-model scheduler.
+  bool global_eft_all_devices = false;
+  // Persistent per-device EFT buffer (absolute times) used when global_eft_all_devices=true.
+  // Mirrors DequeueEFTMapper::device_available_time_buffer.  Reset to 0 at run start.
+  std::vector<timecount_t> global_eft_eft_buf;
   // Classical StarPU DARTS mode: process exactly one device per plan_tasks call.
   // In StarPU, DARTS is invoked reactively per-GPU (one GPU pulls work at a
   // time).  Our multi-device framework calls plan_tasks for all idle GPUs
@@ -3180,12 +2646,23 @@ public:
   int32_t max_in_flight = 0;
 
   // ---------------------------------------------------------------------------
-  // Global EFT batch: task-first EFT across ALL selected devices at once.
-  // Maintains per-device "planned data" tracking so that once a task is
-  // assigned to device D and will transfer data X, subsequent tasks that also
-  // need X on D see it as free (xfer_cost = 0).  This replicates the locality-
-  // cascade behaviour of DequeueEFTMapper while keeping DARTS's DeviceThreshold
-  // transition semantics.  Called from plan_tasks when global_eft_batch=true.
+  // Global EFT batch: task-first EFT across devices at once.
+  //
+  // Two modes controlled by global_eft_all_devices:
+  //
+  //   false (default): selected-devices mode.
+  //     Only considers idle devices in selected_devices_buffer.  Per-device
+  //     cap = global_eft_batch_cap.  dev_eft reset from committed state each
+  //     trigger.  Good for memory-constrained workloads where mapping to busy
+  //     devices would cause premature evictions.
+  //
+  //   true: all-devices mode — matches DequeueEFTMapper quality.
+  //     Considers ALL devices for each task (same as EFT's fill_device_targets).
+  //     Uses persistent global_eft_eft_buf across triggers (same as EFT's
+  //     device_available_time_buffer).  Processes all candidates per trigger
+  //     (no per-device cap).  This is the correct push-model EFT adaptation:
+  //     tasks with data already on a busy device are assigned there rather than
+  //     forced onto an idle device that then duplicates the transfer.
   // ---------------------------------------------------------------------------
   void emit_eft_global_batch(const SchedulerState &state) {
     const auto &tasks_static = state.get_tasks();
@@ -3194,11 +2671,35 @@ public:
     const auto &topology = state.get_topology();
     const auto &data = state.get_data();
     const auto n_devs = static_cast<std::size_t>(state.get_devices().size());
+    const timecount_t global_time = state.get_global_time();
 
-    // Initialize device EFT time estimates from current scheduler state
+    // Initialize device EFT time estimates.
     std::vector<timecount_t> dev_eft(n_devs, 0);
-    for (const devid_t d : selected_devices_buffer) {
-      dev_eft[static_cast<std::size_t>(d)] = state.costs.get_mapped_time(d);
+
+    if (global_eft_all_devices) {
+      // All-devices mode: ensure persistent buffer is large enough.
+      if (global_eft_eft_buf.size() < n_devs) {
+        global_eft_eft_buf.assign(n_devs, 0);
+      }
+      // Reset at the start of a new simulation run.
+      if (global_time == 0) {
+        std::fill(global_eft_eft_buf.begin(), global_eft_eft_buf.end(), 0);
+      }
+      // dev_eft[d] = max(committed remaining work, planned remaining work from last trigger).
+      // committed remaining work = state.costs.get_mapped_time(d) (remaining task durations).
+      // planned remaining work = global_eft_eft_buf[d] - global_time (clipped to 0).
+      for (std::size_t i = 0; i < n_devs; ++i) {
+        const devid_t d = static_cast<devid_t>(i);
+        const timecount_t committed = state.costs.get_mapped_time(d);
+        const timecount_t planned_remaining =
+            (global_eft_eft_buf[i] > global_time) ? (global_eft_eft_buf[i] - global_time) : 0;
+        dev_eft[i] = std::max(committed, planned_remaining);
+      }
+    } else {
+      // Selected-devices mode: initialize only selected devices from committed state.
+      for (const devid_t d : selected_devices_buffer) {
+        dev_eft[static_cast<std::size_t>(d)] = state.costs.get_mapped_time(d);
+      }
     }
 
     // Per-device: data_id → already committed to arrive here in this batch
@@ -3225,36 +2726,38 @@ public:
       return xfer;
     };
 
-    // Per-device cap: emit at most this many tasks per device per trigger.
-    // Using cap=1 matches DequeueEFTMapper's one-task-at-a-time semantics and
-    // prevents memory overflow when many candidates are queued simultaneously.
-    // Planned-data tracking is still useful when cap > 1 and data is shared
-    // across tasks assigned to the same device within the same trigger window.
+    // Task-first EFT: repeatedly pick globally cheapest (task, device) pair.
+    // Stopping criterion depends on mode:
+    //   all-devices: stop when no candidates remain (process everything).
+    //   selected: stop when all selected devices hit their per-trigger cap.
     const int32_t tasks_per_device_cap = global_eft_batch_cap;
     std::vector<int32_t> tasks_emitted(n_devs, 0);
 
-    // Task-first EFT: repeatedly pick globally cheapest (task, device) pair
-    // until each selected device has reached its per-trigger cap.
     while (true) {
-      // Check if all selected devices have hit their cap
-      bool all_capped = true;
-      for (const devid_t d : selected_devices_buffer) {
-        if (tasks_emitted[static_cast<std::size_t>(d)] < tasks_per_device_cap) {
-          all_capped = false;
-          break;
+      if (!global_eft_all_devices) {
+        // Check if all selected devices have hit their cap.
+        bool all_capped = true;
+        for (const devid_t d : selected_devices_buffer) {
+          if (tasks_emitted[static_cast<std::size_t>(d)] < tasks_per_device_cap) {
+            all_capped = false;
+            break;
+          }
         }
-      }
-      if (all_capped) {
-        break;
+        if (all_capped) break;
       }
 
       int32_t best_task = -1;
       devid_t best_dev = -1;
       timecount_t best_score = std::numeric_limits<timecount_t>::max();
 
-      for (const devid_t d : selected_devices_buffer) {
-        if (tasks_emitted[static_cast<std::size_t>(d)] >= tasks_per_device_cap) {
-          continue;  // this device has hit its cap for this trigger
+      // Device iteration: all-devices mode scores every device; selected mode
+      // only scores idle selected devices that haven't hit their cap.
+      const std::size_t n_score_devs = global_eft_all_devices ? n_devs : selected_devices_buffer.size();
+      for (std::size_t di = 0; di < n_score_devs; ++di) {
+        const devid_t d = global_eft_all_devices ? static_cast<devid_t>(di) : selected_devices_buffer[di];
+        if (!global_eft_all_devices &&
+            tasks_emitted[static_cast<std::size_t>(d)] >= tasks_per_device_cap) {
+          continue;
         }
         const timecount_t dev_time = dev_eft[static_cast<std::size_t>(d)];
 
@@ -3286,12 +2789,7 @@ public:
       tasks_emitted[static_cast<std::size_t>(best_dev)]++;
       candidate_tasks[static_cast<std::size_t>(best_task)].active = false;
 
-      // Mark all read and write data of the assigned task as planned-locally-present
-      // on best_dev.  Read data prevents re-fetching shared inputs for subsequent
-      // tasks on the same device.  Write data is the key EFT cascade: once T1 is
-      // assigned to D and will produce O1 at time dev_eft[D], subsequent tasks
-      // needing O1 see it as free on D (start time is bounded by dev_eft[D], which
-      // is at least T1's finish time, so O1 is always ready when they start).
+      // Mark read/write data as planned-locally-present on best_dev.
       const auto &task_rec = candidate_tasks[static_cast<std::size_t>(best_task)];
       const auto best_dev_idx = static_cast<std::size_t>(best_dev);
       for (const dataid_t did : tasks_static.get_read(task_rec.task_id)) {
@@ -3299,6 +2797,13 @@ public:
       }
       for (const dataid_t did : tasks_static.get_write(task_rec.task_id)) {
         planned_data[best_dev_idx].insert(did);
+      }
+    }
+
+    // In all-devices mode: persist the planned end times (absolute) for next trigger.
+    if (global_eft_all_devices) {
+      for (std::size_t i = 0; i < n_devs; ++i) {
+        global_eft_eft_buf[i] = global_time + dev_eft[i];
       }
     }
   }

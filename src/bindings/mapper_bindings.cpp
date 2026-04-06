@@ -161,6 +161,7 @@ void init_mapper_ext(nb::module_ &m) {
       .def_rw("simulate_memory", &DARTSMapper::simulate_memory)
       .def_rw("global_eft_batch", &DARTSMapper::global_eft_batch)
       .def_rw("global_eft_batch_cap", &DARTSMapper::global_eft_batch_cap)
+      .def_rw("global_eft_all_devices", &DARTSMapper::global_eft_all_devices)
       .def_rw("single_device_per_trigger", &DARTSMapper::single_device_per_trigger)
       .def_rw("pipeline_depth", &DARTSMapper::pipeline_depth)
       .def_rw("starvation_threshold", &DARTSMapper::starvation_threshold)
