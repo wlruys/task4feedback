@@ -172,10 +172,6 @@ void init_mapper_ext(nb::module_ &m) {
                    &EnhancedDARTSMapper::set_finish_time_aware)
       .def_prop_rw("local_data_first", &EnhancedDARTSMapper::local_data_first,
                    &EnhancedDARTSMapper::set_local_data_first)
-      .def_prop_rw("simulate_memory", &EnhancedDARTSMapper::simulate_memory,
-                   &EnhancedDARTSMapper::set_simulate_memory)
-      .def_prop_rw("cascade_passes", &EnhancedDARTSMapper::cascade_passes,
-                   &EnhancedDARTSMapper::set_cascade_passes)
       .def(
           "map_tasks",
           [](EnhancedDARTSMapper &mapper, const TaskIDList &tasks,
