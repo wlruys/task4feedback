@@ -2257,3 +2257,1029 @@ public:
     return plan_tasks(task_ids, state);
   }
 };
+
+class EnhancedDARTSMapper : public Mapper {
+private:
+  using TaskIndex = int32_t;
+  static constexpr TaskIndex kNoTask = -1;
+
+  struct Config {
+    // Horizon bands, interpreted relative to selected block D:
+    // remaining = missing_count - 1
+    uint32_t short_horizon_threshold;
+    uint32_t medium_horizon_threshold;
+
+    // Optional non-classic emission for deeper bands if ready_after_one is empty.
+    bool emit_short_horizon;
+    bool emit_medium_horizon;
+    uint32_t short_horizon_k;
+    uint32_t medium_horizon_k;
+
+    // single_dev + iwc + ft_aware behavior
+    bool finish_time_aware;
+    bool local_data_first;
+    bool simulate_memory;   // claim writes too
+    int32_t cascade_passes; // number of same-device local replanning passes
+
+    Config() noexcept
+        : short_horizon_threshold(1),
+          medium_horizon_threshold(3),
+          emit_short_horizon(false),
+          emit_medium_horizon(false),
+          short_horizon_k(2),
+          medium_horizon_k(2),
+          finish_time_aware(true),
+          local_data_first(true),
+          simulate_memory(false),
+          cascade_passes(3) {}
+  };
+
+  struct TaskCandidate {
+    taskid_t task_id = -1;
+    std::size_t original_input_index = 0;
+    priority_t priority = 0;
+    devicemask_t supported_devices = 0;
+    timecount_t canonical_duration = 0;
+    bool active = true;
+  };
+
+  struct TaskAnalysis {
+    bool compatible = false;
+    std::vector<dataid_t> unique_reads;
+    std::vector<dataid_t> missing_reads;
+  };
+
+  enum class MissingBand : uint8_t {
+    LocalData,       // missing_count == 0
+    ReadyAfterOne,   // remaining == 0
+    ShortHorizon,    // 1 <= remaining <= short_horizon_threshold
+    MediumHorizon,   // short_horizon_threshold < remaining <= medium_horizon_threshold
+    LongHorizon      // remaining > medium_horizon_threshold
+  };
+
+  struct FrontierEntry {
+    dataid_t data_id = -1;
+    bool transfer_possible = false;
+    timecount_t transfer_time = MAX_TIME;
+
+    uint32_t ready_after_one_count = 0;
+    timecount_t ready_after_one_compute = 0;
+    TaskIndex best_ready_after_one_task = kNoTask;
+
+    uint32_t short_horizon_count = 0;
+    timecount_t short_horizon_compute = 0;
+    TaskIndex best_short_horizon_task = kNoTask;
+
+    uint32_t medium_horizon_count = 0;
+    timecount_t medium_horizon_compute = 0;
+    TaskIndex best_medium_horizon_task = kNoTask;
+
+    uint32_t long_horizon_count = 0;
+    timecount_t long_horizon_compute = 0;
+    TaskIndex best_long_horizon_task = kNoTask;
+
+    // Sum over all compatible tasks that use D.
+    timecount_t remaining_expected_length = 0;
+  };
+
+  struct Scratch {
+    std::vector<TaskCandidate> candidates;
+    std::vector<TaskAnalysis> task_analysis;
+    ankerl::unordered_dense::map<dataid_t, FrontierEntry> frontier_by_data;
+    std::vector<dataid_t> frontier_keys;
+    std::vector<TaskIndex> emission_tasks;
+
+    // claimed_for_device[data_id] = device_id that has committed to load/produce this data
+    // during the current map_tasks call.  In this implementation we only ever schedule one
+    // device, but we retain device ownership for clarity and future safety.
+    std::vector<devid_t> claimed_for_device;
+
+    // Accumulated estimated load for the chosen device across cascade passes within a
+    // single plan_tasks call.  Initialized from state.costs.get_mapped_time() and
+    // incremented by duration_for_device() for each emitted task so that
+    // fallback_task_for_device_eft computes correct EFT on passes 2+.
+    timecount_t accumulated_load = 0;
+  };
+
+  Scratch scratch_;
+  Config config_;
+
+private:
+  void validate_config() const {
+    T4F_INVARIANT(config_.short_horizon_threshold >= 1);
+    T4F_INVARIANT(config_.short_horizon_threshold < config_.medium_horizon_threshold);
+    T4F_INVARIANT(config_.cascade_passes >= 1);
+  }
+
+  [[nodiscard]] static bool device_in_mask(devicemask_t mask, devid_t device_id) {
+    using UMask = std::make_unsigned_t<devicemask_t>;
+    constexpr std::size_t kBits = std::numeric_limits<UMask>::digits;
+
+    if (device_id < 0 || static_cast<std::size_t>(device_id) >= kBits) {
+      return false;
+    }
+
+    const auto unsigned_mask = static_cast<UMask>(mask);
+    const auto bit = static_cast<UMask>(UMask{1} << static_cast<std::size_t>(device_id));
+    return (unsigned_mask & bit) != 0;
+  }
+
+  [[nodiscard]] timecount_t canonical_duration(taskid_t task_id,
+                                               const SchedulerState& state) const {
+    const auto& tasks = state.get_tasks();
+    if (tasks.is_architecture_supported(task_id, DeviceType::GPU)) {
+      return tasks.get_mean_duration(task_id, DeviceType::GPU);
+    }
+    T4F_INVARIANT(tasks.is_architecture_supported(task_id, DeviceType::CPU));
+    return tasks.get_mean_duration(task_id, DeviceType::CPU);
+  }
+
+  [[nodiscard]] timecount_t duration_for_device(taskid_t task_id,
+                                                devid_t device_id,
+                                                const SchedulerState& state) const {
+    const auto arch = state.get_devices().get_type(device_id);
+    return state.get_tasks().get_mean_duration(task_id, arch);
+  }
+
+  void ensure_capacity(std::size_t num_tasks, std::size_t num_data) {
+    if (scratch_.candidates.size() < num_tasks) {
+      scratch_.candidates.resize(num_tasks);
+    }
+    if (scratch_.task_analysis.size() < num_tasks) {
+      scratch_.task_analysis.resize(num_tasks);
+    }
+    if (scratch_.claimed_for_device.size() < num_data) {
+      scratch_.claimed_for_device.resize(num_data, static_cast<devid_t>(-1));
+    }
+  }
+
+  void clear_pass_scratch() {
+    scratch_.frontier_by_data.clear();
+    scratch_.frontier_keys.clear();
+    scratch_.emission_tasks.clear();
+
+    for (auto& analysis : scratch_.task_analysis) {
+      analysis.compatible = false;
+      analysis.unique_reads.clear();
+      analysis.missing_reads.clear();
+    }
+  }
+
+  void reset_claimed(std::size_t num_data) {
+    std::fill(scratch_.claimed_for_device.begin(),
+              scratch_.claimed_for_device.begin() + static_cast<std::ptrdiff_t>(num_data),
+              static_cast<devid_t>(-1));
+  }
+
+  [[nodiscard]] bool better_task(const TaskCandidate& lhs,
+                                 const TaskCandidate& rhs) const {
+    if (lhs.priority != rhs.priority) {
+      return lhs.priority > rhs.priority;
+    }
+    return lhs.task_id < rhs.task_id;
+  }
+
+  [[nodiscard]] bool better_task_index(TaskIndex lhs, TaskIndex rhs) const {
+    if (rhs == kNoTask) {
+      return lhs != kNoTask;
+    }
+    if (lhs == kNoTask) {
+      return false;
+    }
+    return better_task(
+        scratch_.candidates[static_cast<std::size_t>(lhs)],
+        scratch_.candidates[static_cast<std::size_t>(rhs)]);
+  }
+
+  [[nodiscard]] priority_t task_priority(TaskIndex idx) const {
+    if (idx == kNoTask) {
+      return std::numeric_limits<priority_t>::min();
+    }
+    return scratch_.candidates[static_cast<std::size_t>(idx)].priority;
+  }
+
+  [[nodiscard]] bool better_frontier_ratio(const FrontierEntry& lhs,
+                                           const FrontierEntry& rhs) const {
+    const bool lhs_has_ready_after_one = lhs.ready_after_one_compute > 0;
+    const bool rhs_has_ready_after_one = rhs.ready_after_one_compute > 0;
+
+    if (lhs_has_ready_after_one != rhs_has_ready_after_one) {
+      return lhs_has_ready_after_one;
+    }
+    if (!lhs_has_ready_after_one) {
+      return false;
+    }
+
+    const __int128 lhs_cross =
+        static_cast<__int128>(lhs.transfer_time) *
+        static_cast<__int128>(rhs.ready_after_one_compute);
+    const __int128 rhs_cross =
+        static_cast<__int128>(rhs.transfer_time) *
+        static_cast<__int128>(lhs.ready_after_one_compute);
+
+    return lhs_cross < rhs_cross;
+  }
+
+  // DOPT-style structure:
+  //   1) feasible transfer
+  //   2) min transfer_time / ready_after_one_compute
+  //   3) max ready_after_one_count
+  //   4) max priority among ready_after_one tasks
+  //   5) max short_horizon_count
+  //   6) max remaining_expected_length
+  //   7) stable tie-break by data_id
+  [[nodiscard]] bool better_frontier_entry(const FrontierEntry& lhs,
+                                           const FrontierEntry& rhs) const {
+    if (!rhs.transfer_possible) {
+      return lhs.transfer_possible;
+    }
+    if (!lhs.transfer_possible) {
+      return false;
+    }
+
+    if (better_frontier_ratio(lhs, rhs)) {
+      return true;
+    }
+    if (better_frontier_ratio(rhs, lhs)) {
+      return false;
+    }
+
+    if (lhs.ready_after_one_count != rhs.ready_after_one_count) {
+      return lhs.ready_after_one_count > rhs.ready_after_one_count;
+    }
+
+    const auto lhs_priority = task_priority(lhs.best_ready_after_one_task);
+    const auto rhs_priority = task_priority(rhs.best_ready_after_one_task);
+    if (lhs_priority != rhs_priority) {
+      return lhs_priority > rhs_priority;
+    }
+
+    if (lhs.short_horizon_count != rhs.short_horizon_count) {
+      return lhs.short_horizon_count > rhs.short_horizon_count;
+    }
+
+    if (lhs.medium_horizon_count != rhs.medium_horizon_count) {
+      return lhs.medium_horizon_count > rhs.medium_horizon_count;
+    }
+
+    if (lhs.remaining_expected_length != rhs.remaining_expected_length) {
+      return lhs.remaining_expected_length > rhs.remaining_expected_length;
+    }
+
+    return lhs.data_id < rhs.data_id;
+  }
+
+  [[nodiscard]] bool check_claimed_local(dataid_t data_id,
+                                         devid_t device_id,
+                                         const SchedulerState& state) const {
+    if (state.get_data_manager().check_valid_mapped(data_id, device_id)) {
+      return true;
+    }
+
+    const auto idx = static_cast<std::size_t>(data_id);
+    return idx < scratch_.claimed_for_device.size() &&
+           scratch_.claimed_for_device[idx] == device_id;
+  }
+
+  [[nodiscard]] bool is_claimed_by_other(dataid_t data_id, devid_t device_id) const {
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (idx >= scratch_.claimed_for_device.size()) {
+      return false;
+    }
+    const auto owner = scratch_.claimed_for_device[idx];
+    return owner != static_cast<devid_t>(-1) && owner != device_id;
+  }
+
+  [[nodiscard]] bool estimate_transfer_time(dataid_t data_id,
+                                            devid_t device_id,
+                                            const SchedulerState& state,
+                                            timecount_t& out_time) const {
+    // IWC cascade: data claimed for this device in this round is treated as local.
+    if (check_claimed_local(data_id, device_id, state)) {
+      out_time = 0;
+      return true;
+    }
+
+    // Defensive: if some other device claimed it in a future extension, block it.
+    if (is_claimed_by_other(data_id, device_id)) {
+      out_time = MAX_TIME;
+      return false;
+    }
+
+    const auto& comm = state.get_communication_manager();
+    const auto& topology = state.get_topology();
+    const auto flags = state.get_data_manager().get_mapped_location_flags(data_id);
+    const auto source = comm.get_best_source(topology, device_id, flags);
+
+    if (!source.found) {
+      out_time = MAX_TIME;
+      return false;
+    }
+
+    out_time = comm.ideal_time_to_transfer(
+        topology,
+        state.get_data().get_size(data_id),
+        source.source,
+        device_id);
+    return true;
+  }
+
+  [[nodiscard]] MissingBand classify_missing_count(uint32_t missing_count) const {
+    if (missing_count == 0) {
+      return MissingBand::LocalData;
+    }
+
+    const uint32_t remaining = missing_count - 1;
+    if (remaining == 0) {
+      return MissingBand::ReadyAfterOne;
+    }
+    if (remaining <= config_.short_horizon_threshold) {
+      return MissingBand::ShortHorizon;
+    }
+    if (remaining <= config_.medium_horizon_threshold) {
+      return MissingBand::MediumHorizon;
+    }
+    return MissingBand::LongHorizon;
+  }
+
+  void build_candidates(std::span<const taskid_t> task_ids,
+                        const SchedulerState& state) {
+    const auto& tasks = state.get_tasks();
+    scratch_.candidates.resize(task_ids.size());
+
+    for (std::size_t i = 0; i < task_ids.size(); ++i) {
+      const auto task_id = task_ids[i];
+      auto& c = scratch_.candidates[i];
+      c.task_id = task_id;
+      c.original_input_index = i;
+      c.priority = state.get_mapping_priority(task_id);
+      c.supported_devices = tasks.get_supported_devices_mask(task_id);
+      c.canonical_duration = canonical_duration(task_id, state);
+      c.active = true;
+    }
+  }
+
+  [[nodiscard]] devid_t choose_target_device(const SchedulerState& state) const {
+    const auto& devices = state.get_devices();
+    const auto n_devices = static_cast<devid_t>(devices.size());
+
+    devid_t best_device = -1;
+    timecount_t best_load = MAX_TIME;
+
+    for (devid_t device_id = 0; device_id < n_devices; ++device_id) {
+      if (devices.get_type(device_id) != DeviceType::GPU) {
+        continue;
+      }
+
+      const timecount_t load = state.costs.get_mapped_time(device_id);
+      if (best_device < 0 || load < best_load ||
+          (load == best_load && device_id < best_device)) {
+        best_device = device_id;
+        best_load = load;
+      }
+    }
+
+    return best_device;
+  }
+
+  FrontierEntry& get_or_create_frontier_entry(dataid_t data_id,
+                                              devid_t device_id,
+                                              const SchedulerState& state) {
+    auto it = scratch_.frontier_by_data.find(data_id);
+    if (it != scratch_.frontier_by_data.end()) {
+      return it->second;
+    }
+
+    timecount_t transfer_time = MAX_TIME;
+    const bool transfer_possible =
+        estimate_transfer_time(data_id, device_id, state, transfer_time);
+
+    FrontierEntry entry;
+    entry.data_id = data_id;
+    entry.transfer_possible = transfer_possible;
+    entry.transfer_time = transfer_time;
+
+    auto [inserted_it, inserted] =
+        scratch_.frontier_by_data.emplace(data_id, std::move(entry));
+    (void)inserted;
+    scratch_.frontier_keys.push_back(data_id);
+    return inserted_it->second;
+  }
+
+  // Returns highest-priority compatible active task for fallback.
+  [[nodiscard]] TaskIndex analyze_device_and_build_frontier(devid_t device_id,
+                                                            const SchedulerState& state) {
+    const auto& tasks = state.get_tasks();
+    TaskIndex best_priority_fallback = kNoTask;
+
+    for (std::size_t i = 0; i < scratch_.candidates.size(); ++i) {
+      const TaskIndex task_index = static_cast<TaskIndex>(i);
+      const auto& candidate = scratch_.candidates[i];
+      auto& analysis = scratch_.task_analysis[i];
+
+      if (!candidate.active) {
+        continue;
+      }
+      if (!device_in_mask(candidate.supported_devices, device_id)) {
+        continue;
+      }
+
+      analysis.compatible = true;
+      if (better_task_index(task_index, best_priority_fallback)) {
+        best_priority_fallback = task_index;
+      }
+
+      ankerl::unordered_dense::set<dataid_t> unique_read_set;
+      unique_read_set.reserve(16);
+
+      for (const auto data_id : tasks.get_read(candidate.task_id)) {
+        if (!unique_read_set.emplace(data_id).second) {
+          continue;
+        }
+        analysis.unique_reads.push_back(data_id);
+      }
+
+      for (const auto data_id : analysis.unique_reads) {
+        if (!check_claimed_local(data_id, device_id, state)) {
+          analysis.missing_reads.push_back(data_id);
+          auto& entry = get_or_create_frontier_entry(data_id, device_id, state);
+          entry.remaining_expected_length += candidate.canonical_duration;
+        }
+      }
+    }
+
+    return best_priority_fallback;
+  }
+
+  void accumulate_frontier_metrics(devid_t device_id,
+                                   const SchedulerState& state) {
+    for (std::size_t i = 0; i < scratch_.candidates.size(); ++i) {
+      const TaskIndex task_index = static_cast<TaskIndex>(i);
+      const auto& candidate = scratch_.candidates[i];
+      const auto& analysis = scratch_.task_analysis[i];
+
+      if (!candidate.active || !analysis.compatible) {
+        continue;
+      }
+      if (analysis.missing_reads.empty()) {
+        continue;
+      }
+
+      const uint32_t missing_count =
+          static_cast<uint32_t>(analysis.missing_reads.size());
+      const auto band = classify_missing_count(missing_count);
+
+      // Use device-specific predicted time for bucket compute accumulation.
+      const timecount_t device_duration =
+          duration_for_device(candidate.task_id, device_id, state);
+
+      for (const auto data_id : analysis.missing_reads) {
+        auto& entry = scratch_.frontier_by_data.at(data_id);
+
+        switch (band) {
+          case MissingBand::LocalData:
+            break;
+
+          case MissingBand::ReadyAfterOne:
+            entry.ready_after_one_count += 1;
+            entry.ready_after_one_compute += device_duration;
+            if (better_task_index(task_index, entry.best_ready_after_one_task)) {
+              entry.best_ready_after_one_task = task_index;
+            }
+            break;
+
+          case MissingBand::ShortHorizon:
+            entry.short_horizon_count += 1;
+            entry.short_horizon_compute += device_duration;
+            if (better_task_index(task_index, entry.best_short_horizon_task)) {
+              entry.best_short_horizon_task = task_index;
+            }
+            break;
+
+          case MissingBand::MediumHorizon:
+            entry.medium_horizon_count += 1;
+            entry.medium_horizon_compute += device_duration;
+            if (better_task_index(task_index, entry.best_medium_horizon_task)) {
+              entry.best_medium_horizon_task = task_index;
+            }
+            break;
+
+          case MissingBand::LongHorizon:
+            entry.long_horizon_count += 1;
+            entry.long_horizon_compute += device_duration;
+            if (better_task_index(task_index, entry.best_long_horizon_task)) {
+              entry.best_long_horizon_task = task_index;
+            }
+            break;
+        }
+      }
+    }
+  }
+
+  [[nodiscard]] FrontierEntry* choose_best_frontier_entry() {
+    FrontierEntry* best = nullptr;
+
+    for (const auto data_id : scratch_.frontier_keys) {
+      auto& entry = scratch_.frontier_by_data.at(data_id);
+      if (!entry.transfer_possible) {
+        continue;
+      }
+
+      if (best == nullptr || better_frontier_entry(entry, *best)) {
+        best = &entry;
+      }
+    }
+
+    return best;
+  }
+
+  void append_action(TaskIndex task_index, devid_t device_id) {
+    auto& candidate = scratch_.candidates[static_cast<std::size_t>(task_index)];
+    if (!candidate.active) {
+      return;
+    }
+
+    action_buffer.push_back(Action{
+        candidate.original_input_index,
+        device_id,
+        candidate.priority,
+        candidate.priority
+    });
+    candidate.active = false;
+  }
+
+  [[nodiscard]] std::size_t active_candidate_count() const {
+    return static_cast<std::size_t>(std::count_if(
+        scratch_.candidates.begin(),
+        scratch_.candidates.end(),
+        [](const TaskCandidate& c) { return c.active; }));
+  }
+
+  [[nodiscard]] bool task_uses_selected_missing_data(TaskIndex task_index,
+                                                     dataid_t selected_data_id) const {
+    const auto& analysis = scratch_.task_analysis[static_cast<std::size_t>(task_index)];
+    for (const auto data_id : analysis.missing_reads) {
+      if (data_id == selected_data_id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void emit_local_data_tasks(devid_t device_id) {
+    scratch_.emission_tasks.clear();
+
+    for (std::size_t i = 0; i < scratch_.candidates.size(); ++i) {
+      const TaskIndex task_index = static_cast<TaskIndex>(i);
+      const auto& candidate = scratch_.candidates[i];
+      const auto& analysis = scratch_.task_analysis[i];
+
+      if (!candidate.active || !analysis.compatible) {
+        continue;
+      }
+      if (!analysis.missing_reads.empty()) {
+        continue;
+      }
+
+      scratch_.emission_tasks.push_back(task_index);
+    }
+
+    if (scratch_.emission_tasks.empty()) {
+      return;
+    }
+
+    std::sort(scratch_.emission_tasks.begin(),
+              scratch_.emission_tasks.end(),
+              [&](TaskIndex lhs, TaskIndex rhs) {
+                return better_task_index(lhs, rhs);
+              });
+
+    for (const auto task_index : scratch_.emission_tasks) {
+      append_action(task_index, device_id);
+    }
+  }
+
+  void emit_ready_after_one_tasks_for_data(const FrontierEntry& selected,
+                                           devid_t device_id) {
+    scratch_.emission_tasks.clear();
+
+    if (selected.ready_after_one_count == 0) {
+      return;
+    }
+
+    for (std::size_t i = 0; i < scratch_.candidates.size(); ++i) {
+      const TaskIndex task_index = static_cast<TaskIndex>(i);
+      const auto& candidate = scratch_.candidates[i];
+      const auto& analysis = scratch_.task_analysis[i];
+
+      if (!candidate.active || !analysis.compatible) {
+        continue;
+      }
+      if (analysis.missing_reads.size() != 1) {
+        continue;
+      }
+      if (analysis.missing_reads.front() != selected.data_id) {
+        continue;
+      }
+
+      scratch_.emission_tasks.push_back(task_index);
+    }
+
+    std::sort(scratch_.emission_tasks.begin(),
+              scratch_.emission_tasks.end(),
+              [&](TaskIndex lhs, TaskIndex rhs) {
+                return better_task_index(lhs, rhs);
+              });
+
+    for (const auto task_index : scratch_.emission_tasks) {
+      append_action(task_index, device_id);
+    }
+  }
+
+  void emit_top_k_band_tasks_for_data(const FrontierEntry& selected,
+                                      devid_t device_id,
+                                      MissingBand band,
+                                      uint32_t k) {
+    if (k == 0) {
+      return;
+    }
+
+    scratch_.emission_tasks.clear();
+
+    for (std::size_t i = 0; i < scratch_.candidates.size(); ++i) {
+      const TaskIndex task_index = static_cast<TaskIndex>(i);
+      const auto& candidate = scratch_.candidates[i];
+      const auto& analysis = scratch_.task_analysis[i];
+
+      if (!candidate.active || !analysis.compatible) {
+        continue;
+      }
+
+      const uint32_t missing_count =
+          static_cast<uint32_t>(analysis.missing_reads.size());
+      if (classify_missing_count(missing_count) != band) {
+        continue;
+      }
+      if (!task_uses_selected_missing_data(task_index, selected.data_id)) {
+        continue;
+      }
+
+      scratch_.emission_tasks.push_back(task_index);
+    }
+
+    if (scratch_.emission_tasks.empty()) {
+      return;
+    }
+
+    const std::size_t emit_count =
+        std::min(static_cast<std::size_t>(k), scratch_.emission_tasks.size());
+
+    std::partial_sort(scratch_.emission_tasks.begin(),
+                      scratch_.emission_tasks.begin() +
+                          static_cast<std::ptrdiff_t>(emit_count),
+                      scratch_.emission_tasks.end(),
+                      [&](TaskIndex lhs, TaskIndex rhs) {
+                        return better_task_index(lhs, rhs);
+                      });
+
+    for (std::size_t j = 0; j < emit_count; ++j) {
+      append_action(scratch_.emission_tasks[j], device_id);
+    }
+  }
+
+  [[nodiscard]] TaskIndex fallback_task_for_device_eft(devid_t device_id,
+                                                       const SchedulerState& state) const {
+    const timecount_t device_load = scratch_.accumulated_load;
+    const auto& data_manager = state.get_data_manager();
+    const auto& comm = state.get_communication_manager();
+    const auto& topology = state.get_topology();
+    const auto& data = state.get_data();
+
+    TaskIndex best_task = kNoTask;
+    timecount_t best_finish_time = std::numeric_limits<timecount_t>::max();
+
+    for (std::size_t i = 0; i < scratch_.candidates.size(); ++i) {
+      const TaskIndex task_index = static_cast<TaskIndex>(i);
+      const auto& candidate = scratch_.candidates[i];
+      const auto& analysis = scratch_.task_analysis[i];
+
+      if (!candidate.active || !analysis.compatible) {
+        continue;
+      }
+
+      timecount_t transfer_time = 0;
+      bool feasible = true;
+
+      for (const auto data_id : analysis.missing_reads) {
+        if (check_claimed_local(data_id, device_id, state)) {
+          continue;
+        }
+
+        const auto flags = data_manager.get_mapped_location_flags(data_id);
+        const auto req = comm.get_best_source(topology, device_id, flags);
+        if (!req.found) {
+          feasible = false;
+          break;
+        }
+
+        transfer_time += comm.ideal_time_to_transfer(
+            topology, data.get_size(data_id), req.source, device_id);
+      }
+
+      if (!feasible) {
+        continue;
+      }
+
+      const timecount_t finish_time =
+          device_load + transfer_time +
+          duration_for_device(candidate.task_id, device_id, state);
+
+      if (finish_time < best_finish_time ||
+          (finish_time == best_finish_time &&
+           better_task_index(task_index, best_task))) {
+        best_finish_time = finish_time;
+        best_task = task_index;
+      }
+    }
+
+    return best_task;
+  }
+
+  void claim_selected_data_and_emitted_task_data(dataid_t selected_data_id,
+                                                 devid_t device_id,
+                                                 const SchedulerState& state,
+                                                 std::size_t pass_start_index) {
+    const auto n_data = scratch_.claimed_for_device.size();
+    const auto& tasks = state.get_tasks();
+    const auto& data_manager = state.get_data_manager();
+
+    const auto mark_if_nonlocal = [&](dataid_t data_id) {
+      if (data_manager.check_valid_mapped(data_id, device_id)) {
+        return;
+      }
+      const auto idx = static_cast<std::size_t>(data_id);
+      if (idx < n_data && scratch_.claimed_for_device[idx] == static_cast<devid_t>(-1)) {
+        scratch_.claimed_for_device[idx] = device_id;
+      }
+    };
+
+    mark_if_nonlocal(selected_data_id);
+
+    // Only claim tasks emitted in THIS pass (not from earlier cascade passes).
+    // Iterating from pass_start_index avoids re-processing already-claimed data.
+    const std::size_t emitted_count = action_buffer.size();
+    for (std::size_t i = pass_start_index; i < emitted_count; ++i) {
+      const auto input_pos = action_buffer[i].pos;
+      if (input_pos >= scratch_.candidates.size()) {
+        continue;
+      }
+
+      const auto task_id = scratch_.candidates[input_pos].task_id;
+      for (const auto data_id : tasks.get_read(task_id)) {
+        mark_if_nonlocal(data_id);
+      }
+      if (config_.simulate_memory) {
+        for (const auto data_id : tasks.get_write(task_id)) {
+          mark_if_nonlocal(data_id);
+        }
+      }
+
+      // Accumulate the estimated execution duration so subsequent cascade passes
+      // see the correct device load when computing EFT-based fallback decisions.
+      scratch_.accumulated_load +=
+          duration_for_device(task_id, device_id, state);
+    }
+  }
+
+  enum class PassReason : uint8_t {
+    None,
+    LocalData,
+    ReadyAfterOne,
+    ShortHorizon,
+    MediumHorizon,
+    Fallback
+  };
+
+  PassReason emit_for_selected_frontier(const FrontierEntry* selected,
+                                        TaskIndex best_fallback_task,
+                                        devid_t device_id) {
+    const std::size_t before = action_buffer.size();
+
+    if (config_.local_data_first) {
+      emit_local_data_tasks(device_id);
+      if (action_buffer.size() > before) {
+        return PassReason::LocalData;
+      }
+    }
+
+    if (selected != nullptr) {
+      emit_ready_after_one_tasks_for_data(*selected, device_id);
+      if (action_buffer.size() > before) {
+        return PassReason::ReadyAfterOne;
+      }
+
+      if (config_.emit_short_horizon) {
+        emit_top_k_band_tasks_for_data(*selected, device_id,
+                                       MissingBand::ShortHorizon,
+                                       config_.short_horizon_k);
+        if (action_buffer.size() > before) {
+          return PassReason::ShortHorizon;
+        }
+      }
+
+      if (config_.emit_medium_horizon) {
+        emit_top_k_band_tasks_for_data(*selected, device_id,
+                                       MissingBand::MediumHorizon,
+                                       config_.medium_horizon_k);
+        if (action_buffer.size() > before) {
+          return PassReason::MediumHorizon;
+        }
+      }
+    }
+
+    if (best_fallback_task != kNoTask) {
+      append_action(best_fallback_task, device_id);
+      if (action_buffer.size() > before) {
+        return PassReason::Fallback;
+      }
+    }
+
+    return PassReason::None;
+  }
+
+  ActionList& plan_tasks(std::span<const taskid_t> task_ids,
+                         const SchedulerState& state) {
+    action_buffer.clear();
+    action_buffer.reserve(task_ids.size());
+
+    if (task_ids.empty()) {
+      return action_buffer;
+    }
+
+    validate_config();
+
+    const std::size_t num_data = state.get_data().size();
+    ensure_capacity(task_ids.size(), num_data);
+    build_candidates(task_ids, state);
+    reset_claimed(num_data);
+
+    const devid_t device_id = choose_target_device(state);
+    if (device_id < 0) {
+      return action_buffer;
+    }
+
+    // Seed accumulated load from the real device state; updated after each emission
+    // so that fallback EFT on later cascade passes accounts for already-emitted tasks.
+    scratch_.accumulated_load = state.costs.get_mapped_time(device_id);
+
+    // single_dev + iwc: repeat local planning passes for the same chosen device.
+    for (int32_t pass = 0; pass < config_.cascade_passes; ++pass) {
+      if (active_candidate_count() == 0) {
+        break;
+      }
+
+      clear_pass_scratch();
+
+      TaskIndex best_priority_fallback =
+          analyze_device_and_build_frontier(device_id, state);
+
+      accumulate_frontier_metrics(device_id, state);
+      FrontierEntry* best_frontier = choose_best_frontier_entry();
+
+      // ft_aware override:
+      // if there is no useful block, or the selected block has no ready_after_one payoff,
+      // or transfer dominates unlocked compute, prefer EFT fallback.
+      TaskIndex selected_fallback = best_priority_fallback;
+      if (config_.finish_time_aware && best_priority_fallback != kNoTask) {
+        const bool no_block = (best_frontier == nullptr);
+        const bool block_only_deeper =
+            (best_frontier != nullptr && best_frontier->ready_after_one_count == 0);
+        const bool transfer_dominated =
+            (best_frontier != nullptr &&
+             best_frontier->ready_after_one_compute < best_frontier->transfer_time);
+
+        if (no_block || block_only_deeper || transfer_dominated) {
+          selected_fallback = fallback_task_for_device_eft(device_id, state);
+          best_frontier = nullptr; // suppress block-based emission for this pass
+        }
+      }
+
+      const std::size_t before = action_buffer.size();
+      const PassReason reason =
+          emit_for_selected_frontier(best_frontier, selected_fallback, device_id);
+
+      if (action_buffer.size() == before) {
+        break;
+      }
+
+      // Only claim when we actually chose a frontier block.
+      if (best_frontier != nullptr &&
+          reason != PassReason::LocalData &&
+          reason != PassReason::Fallback &&
+          reason != PassReason::None) {
+        claim_selected_data_and_emitted_task_data(best_frontier->data_id, device_id, state, before);
+      } else {
+        // For LocalData and Fallback passes we still need to update accumulated_load
+        // so that any further fallback EFT calls have an accurate baseline.
+        for (std::size_t i = before; i < action_buffer.size(); ++i) {
+          const auto input_pos = action_buffer[i].pos;
+          if (input_pos < scratch_.candidates.size()) {
+            scratch_.accumulated_load +=
+                duration_for_device(scratch_.candidates[input_pos].task_id, device_id, state);
+          }
+        }
+      }
+
+      // Stop if we emitted only local data or only a fallback task:
+      // these do not create a new selected-block cascade in the next pass.
+      if (reason == PassReason::LocalData ||
+          reason == PassReason::Fallback ||
+          reason == PassReason::None) {
+        break;
+      }
+    }
+
+    return action_buffer;
+  }
+
+public:
+  EnhancedDARTSMapper()
+      : config_{} {
+    validate_config();
+  }
+
+  explicit EnhancedDARTSMapper(Config config)
+      : config_(config) {
+    validate_config();
+  }
+
+  EnhancedDARTSMapper(std::size_t num_tasks,
+                      std::size_t /*num_devices*/,
+                      Config config = {})
+      : config_(config) {
+    validate_config();
+    scratch_.candidates.reserve(num_tasks);
+    scratch_.task_analysis.reserve(num_tasks);
+    scratch_.emission_tasks.reserve(num_tasks);
+    scratch_.frontier_keys.reserve(num_tasks);
+  }
+
+  void set_short_horizon_threshold(uint32_t value) {
+    config_.short_horizon_threshold = value;
+    validate_config();
+  }
+
+  void set_medium_horizon_threshold(uint32_t value) {
+    config_.medium_horizon_threshold = value;
+    validate_config();
+  }
+
+  void set_emit_short_horizon(bool value) { config_.emit_short_horizon = value; }
+  void set_emit_medium_horizon(bool value) { config_.emit_medium_horizon = value; }
+  void set_short_horizon_k(uint32_t value) { config_.short_horizon_k = value; }
+  void set_medium_horizon_k(uint32_t value) { config_.medium_horizon_k = value; }
+
+  void set_finish_time_aware(bool value) { config_.finish_time_aware = value; }
+  void set_local_data_first(bool value) { config_.local_data_first = value; }
+  void set_simulate_memory(bool value) { config_.simulate_memory = value; }
+  void set_cascade_passes(int32_t value) {
+    config_.cascade_passes = value;
+    validate_config();
+  }
+
+  [[nodiscard]] uint32_t short_horizon_threshold() const {
+    return config_.short_horizon_threshold;
+  }
+
+  [[nodiscard]] uint32_t medium_horizon_threshold() const {
+    return config_.medium_horizon_threshold;
+  }
+
+  [[nodiscard]] bool emit_short_horizon() const { return config_.emit_short_horizon; }
+  [[nodiscard]] bool emit_medium_horizon() const { return config_.emit_medium_horizon; }
+  [[nodiscard]] uint32_t short_horizon_k() const { return config_.short_horizon_k; }
+  [[nodiscard]] uint32_t medium_horizon_k() const { return config_.medium_horizon_k; }
+
+  [[nodiscard]] bool finish_time_aware() const { return config_.finish_time_aware; }
+  [[nodiscard]] bool local_data_first() const { return config_.local_data_first; }
+  [[nodiscard]] bool simulate_memory() const { return config_.simulate_memory; }
+  [[nodiscard]] int32_t cascade_passes() const { return config_.cascade_passes; }
+
+  Action map_task(taskid_t task_id, const SchedulerState& state) override {
+    auto& actions = plan_tasks(std::span<const taskid_t>(&task_id, 1), state);
+    if (!actions.empty()) {
+      return actions.front();
+    }
+
+    // Conservative fallback if planning produced nothing.
+    fill_device_targets(task_id, state);
+    T4F_INVARIANT(!device_buffer.empty());
+    const auto mp = state.get_mapping_priority(task_id);
+    return Action{0, device_buffer.front(), mp, mp};
+  }
+
+  ActionList& map_tasks(std::span<const taskid_t> task_ids,
+                        const SchedulerState& state) override {
+    return plan_tasks(task_ids, state);
+  }
+};

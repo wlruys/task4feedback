@@ -267,7 +267,8 @@ public:
       }
 
       const int32_t step = has_tags ? (static_cast<int32_t>(task_id) / grid_size) : 0;
-      const int32_t priority = step * grid_size + morton_rank[local_id];
+      const int32_t max_step = has_tags ? (static_cast<int32_t>(n_tasks - 1) / grid_size) : 0;
+      const int32_t priority = (max_step - step) * grid_size + morton_rank[local_id];
       set_priority(task_id, priority);
     }
   }

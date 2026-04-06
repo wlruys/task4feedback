@@ -151,4 +151,36 @@ void init_mapper_ext(nb::module_ &m) {
             return mapper.map_tasks(std::span<const taskid_t>(tasks), state);
           },
           "tasks"_a, "state"_a, nb::rv_policy::reference_internal);
+
+  nb::class_<EnhancedDARTSMapper, Mapper>(m, "EnhancedDARTSMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
+      .def(nb::init<EnhancedDARTSMapper &>(), "other"_a)
+      .def_prop_rw("short_horizon_threshold", &EnhancedDARTSMapper::short_horizon_threshold,
+                   &EnhancedDARTSMapper::set_short_horizon_threshold)
+      .def_prop_rw("medium_horizon_threshold", &EnhancedDARTSMapper::medium_horizon_threshold,
+                   &EnhancedDARTSMapper::set_medium_horizon_threshold)
+      .def_prop_rw("emit_short_horizon", &EnhancedDARTSMapper::emit_short_horizon,
+                   &EnhancedDARTSMapper::set_emit_short_horizon)
+      .def_prop_rw("emit_medium_horizon", &EnhancedDARTSMapper::emit_medium_horizon,
+                   &EnhancedDARTSMapper::set_emit_medium_horizon)
+      .def_prop_rw("short_horizon_k", &EnhancedDARTSMapper::short_horizon_k,
+                   &EnhancedDARTSMapper::set_short_horizon_k)
+      .def_prop_rw("medium_horizon_k", &EnhancedDARTSMapper::medium_horizon_k,
+                   &EnhancedDARTSMapper::set_medium_horizon_k)
+      .def_prop_rw("finish_time_aware", &EnhancedDARTSMapper::finish_time_aware,
+                   &EnhancedDARTSMapper::set_finish_time_aware)
+      .def_prop_rw("local_data_first", &EnhancedDARTSMapper::local_data_first,
+                   &EnhancedDARTSMapper::set_local_data_first)
+      .def_prop_rw("simulate_memory", &EnhancedDARTSMapper::simulate_memory,
+                   &EnhancedDARTSMapper::set_simulate_memory)
+      .def_prop_rw("cascade_passes", &EnhancedDARTSMapper::cascade_passes,
+                   &EnhancedDARTSMapper::set_cascade_passes)
+      .def(
+          "map_tasks",
+          [](EnhancedDARTSMapper &mapper, const TaskIDList &tasks,
+             const SchedulerState &state) -> ActionList & {
+            return mapper.map_tasks(std::span<const taskid_t>(tasks), state);
+          },
+          "tasks"_a, "state"_a, nb::rv_policy::reference_internal);
 }
