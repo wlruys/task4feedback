@@ -6,7 +6,7 @@ defaults:
   - runtime: batch
   - wandb: default
   - logging: default
-  - lr_scheduler: none
+  - lr_scheduler: linear_decay
   - noise: lognormal
   - optimizer: adamw
   - eval: default
@@ -53,11 +53,11 @@ optimizer:
   lr: 1e-3
 
 system:
-  mem: 80e9
+  mem: 96e9
 
 runtime:
-  open_in_flight: 64
-  close_in_flight: 128
+  open_in_flight: 16
+  close_in_flight: 21
   starvation_threshold: 5
 
 wandb:
@@ -73,12 +73,3 @@ eval:
   samples: 4
   pickle_path: ./pickled_evaluation/8x8x128_corners_1:1:1.pkl
   expert_path: parmetis
-
-sweep:
-  n_samples: 10
-  task_th: 0.4
-  level_size_step: 1e9
-  start_mem: 1e9
-  end_mem: 200e9
-  exps: ["EFT", "BlockCyclic(2x2)","BlockCyclic(1x1)", "ParMETIS", "ColWise"]
-  policy: "Oracle(32)"

@@ -1,0 +1,75 @@
+{
+    "seed_start": 0,
+    "seed_step": 1,
+    "num_seeds": 1,
+    "start_mem": 250e9,
+    "end_mem": 435e9,
+    "step_mem": 5e9,
+    "dmem": 96e9,
+    "experiments": {
+        "circle": [
+            {
+                "interior": 1,
+                "boundary": 0.1
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1
+            },
+            {
+                "interior": 10,
+                "boundary": 1
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1
+            },
+            {
+                "interior": 100,
+                "boundary": 1
+            },
+            {
+                "interior": 100,
+                "boundary": 10
+            }
+        ],
+        "corners": [
+            {
+                "interior": 1,
+                "boundary": 0.1
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1
+            },
+            {
+                "interior": 10,
+                "boundary": 1
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1
+            },
+            {
+                "interior": 100,
+                "boundary": 1
+            },
+            {
+                "interior": 100,
+                "boundary": 10
+            }
+        ]
+    },
+    "cores_per_job": 2,
+    "command_template": [
+        "python3",
+        "run_model.py",
+        "--config-name",
+        "8x8x128_dynamic_{exp_name}_cnn",
+        "graph.config.level_memory={mem}",
+        "system.mem={dmem}",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}",
+        "system=4h100"
+    ]
+}

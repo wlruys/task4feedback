@@ -1,11 +1,13 @@
 import argparse
+import itertools
 import json
-import subprocess
-import time
 import os
 import shutil
-import itertools
+import subprocess
+import time
+
 from tqdm import tqdm
+
 from task4feedback.experiment_helper.run_name import calculate_ratio
 
 
@@ -171,8 +173,13 @@ class Scheduler:
         self.job_counter += 1
 
         try:
-            # proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
-            proc = subprocess.Popen(full_cmd, text=True)
+            proc = subprocess.Popen(
+                full_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            # proc = subprocess.Popen(full_cmd, text=True)
             self.running_jobs.append({"proc": proc, "cores": cores, "cmd_str": cmd_str})
         except Exception as e:
             tqdm.write(f"[ERROR] Failed to launch: {cmd_str}\n{e}")
@@ -220,16 +227,25 @@ def main():
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--max-jobs", type=int, default=None)
-    parser.add_argument("--no-pinning", action="store_true", help="Disable numactl pinning")
+    parser.add_argument(
+        "--use-pinning", action="store_true", help="Enable numactl pinning"
+    )
     parser.add_argument("--nodes", type=int, default=1, help="Total number of nodes")
-    parser.add_argument("--node-number", type=int, default=0, help="Index of current node (0 to nodes-1)")
+    parser.add_argument(
+        "--node-number",
+        type=int,
+        default=0,
+        help="Index of current node (0 to nodes-1)",
+    )
     args = parser.parse_args()
 
     if args.node_number >= args.nodes:
-        raise ValueError(f"node_number ({args.node_number}) must be less than nodes ({args.nodes})")
+        raise ValueError(
+            f"node_number ({args.node_number}) must be less than nodes ({args.nodes})"
+        )
 
     # Load Config
-    with open(args.config, "r") as f:
+    with open(args.config) as f:
         config = json.load(f)
 
     # Global Config params
@@ -258,7 +274,19 @@ def main():
 
     # Identify top-level keys that should be in context
     # exclude known structural keys
-    exclude_keys = {"experiments", "command_template", "cores_per_job", "seed_start", "seed_step", "num_seeds", "start_mem", "end_mem", "step_mem", "global_params", "sweeps"}
+    exclude_keys = {
+        "experiments",
+        "command_template",
+        "cores_per_job",
+        "seed_start",
+        "seed_step",
+        "num_seeds",
+        "start_mem",
+        "end_mem",
+        "step_mem",
+        "global_params",
+        "sweeps",
+    }
 
     # Create a base context from top-level config items.
     # List-valued entries are treated as sweep dimensions instead of being
@@ -343,7 +371,9 @@ def main():
 
                         # Overwrite/Set memory context if valid
                         if mem_val is not None:
-                            context["mem"] = int(mem_val)  # Ensure int format for template
+                            context["mem"] = int(
+                                mem_val
+                            )  # Ensure int format for template
 
                         # Derived memory params
                         if "dmem" in context:
@@ -353,7 +383,9 @@ def main():
                             context["dmem_int"] = int(context["dmem"])
 
                         if "percentages" in context and mem_val is not None:
-                            context["mem"] = int(float(mem_val) * context["percentages"] / 100)
+                            context["mem"] = int(
+                                float(mem_val) * context["percentages"] / 100
+                            )
 
                         formatted_cmd = []
                         for token in cmd_template:
@@ -375,8 +407,8 @@ def main():
             print(f"{' '.join(cmd)}")
         return
 
-    # Use args.no_pinning to toggle behavior
-    scheduler = Scheduler(use_pinning=not args.no_pinning)
+    # Use args.use_pinning to toggle behavior
+    scheduler = Scheduler(use_pinning=args.use_pinning)
 
     pending_jobs = list(my_jobs)
     pbar = tqdm(total=len(my_jobs), desc="Processing Jobs", unit="job")

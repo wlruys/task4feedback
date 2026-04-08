@@ -7,6 +7,7 @@ from pathlib import Path
 import git
 import hydra
 import numpy
+import task4feedback.fastsim2 as fastsim
 import torch
 import wandb
 from hydra.core.hydra_config import HydraConfig
@@ -26,6 +27,14 @@ from task4feedback.experiment_helper.algorithm import (
 )
 from task4feedback.experiment_helper.env import make_env
 from task4feedback.experiment_helper.graph import make_graph_builder
+from task4feedback.experiment_helper.mapper import (
+    DARTSConfig,
+    EnhancedDARTSConfig,
+    TransitionConfig,
+    make_darts_mapper,
+    make_enhanced_darts_mapper,
+    make_transition_conditions,
+)
 from task4feedback.experiment_helper.model import create_td_actor_critic_models
 from task4feedback.experiment_helper.parmetis import find_best_cfg_optuna, run_parmetis
 from task4feedback.experiment_helper.run_name import cfg_hash, make_run_name
@@ -52,7 +61,7 @@ size = comm.Get_size()
 
 def configure_training(cfg: DictConfig):
     # start_logger()
-    option = "ParMETIS"
+    option = OmegaConf.select(cfg, "single_graph.option", default="ParMETIS")
     cfg.graph.config.steps = 256
     for i in range(1):
         if rank == 0:
@@ -65,15 +74,6 @@ def configure_training(cfg: DictConfig):
                 workload.animate_workload(
                     show=False, title="outputs/workload_animation.mp4"
                 )
-            exit()
-            # print("Running option: EFT")
-            # start = time.time()
-            # # env.rollout(max_steps=999)
-            # env.simulator.disable_external_mapper()
-            # env.simulator.run()
-            # end = time.time()
-            # print(f"EFT time: {end - start:.2f} seconds")
-            # exit()
         else:
             env = None
 
@@ -138,6 +138,73 @@ def configure_training(cfg: DictConfig):
                 ParMETIS=ParMETIS,
                 skip_error=True,
             )
+        elif option == "DARTS":
+            mapper = make_darts_mapper(DARTSConfig())
+            sim_input = SimulatorInput(
+                env.simulator.input.graph,
+                env.simulator.input.data,
+                env.simulator.input.system,
+                task_noise=env.simulator.input.task_noise,
+                transition_conditions=make_transition_conditions(
+                    "darts",
+                    top_k_candidates=env.simulator.input.top_k_candidates,
+                    config=TransitionConfig(),
+                ),
+                top_k_candidates=env.simulator.input.top_k_candidates,
+            )
+            env.simulator = SimulatorDriver(
+                sim_input,
+                internal_mapper=mapper,
+                observer_factory=env.simulator.observer_factory,
+            )
+            env.simulator.initialize()
+            env.simulator.initialize_data()
+            env.simulator.disable_external_mapper()
+            env.simulator.run()
+        elif option == "EnhancedDARTS":
+            mapper = make_enhanced_darts_mapper(EnhancedDARTSConfig())
+            sim_input = SimulatorInput(
+                env.simulator.input.graph,
+                env.simulator.input.data,
+                env.simulator.input.system,
+                task_noise=env.simulator.input.task_noise,
+                transition_conditions=make_transition_conditions(
+                    "enhanced_darts",
+                    top_k_candidates=env.simulator.input.top_k_candidates,
+                    config=TransitionConfig(),
+                ),
+                top_k_candidates=env.simulator.input.top_k_candidates,
+            )
+            env.simulator = SimulatorDriver(
+                sim_input,
+                internal_mapper=mapper,
+                observer_factory=env.simulator.observer_factory,
+            )
+            env.simulator.initialize()
+            env.simulator.initialize_data()
+            env.simulator.disable_external_mapper()
+            env.simulator.run()
+        elif option == "DARTS_pipeline":
+            mapper = make_darts_mapper(DARTSConfig())
+            sim_input = SimulatorInput(
+                env.simulator.input.graph,
+                env.simulator.input.data,
+                env.simulator.input.system,
+                task_noise=env.simulator.input.task_noise,
+                transition_conditions=fastsim.DARTSPipelineTransitionConditions(
+                    4, 4 * (cfg.system.n_devices - 1), 1
+                ),
+                top_k_candidates=env.simulator.input.top_k_candidates,
+            )
+            env.simulator = SimulatorDriver(
+                sim_input,
+                internal_mapper=mapper,
+                observer_factory=env.simulator.observer_factory,
+            )
+            env.simulator.initialize()
+            env.simulator.initialize_data()
+            env.simulator.disable_external_mapper()
+            env.simulator.run()
         else:
             raise ValueError(f"Unknown option: {option}")
 

@@ -1,6 +1,7 @@
 #include "action.hpp"
 #include "nbh.hpp"
-#include "scheduler.hpp"
+#include "scheduler_state.hpp"
+#include "transition_conditions.hpp"
 #include "tasks.hpp"
 #include <cstdint>
 
@@ -51,6 +52,15 @@ void init_scheduler_ext(nb::module_ &m) {
       .def_rw("max_in_flight", &BatchTransitionConditions::max_in_flight)
       .def_ro("last_accessed", &BatchTransitionConditions::last_accessed)
       .def_ro("active_batch", &BatchTransitionConditions::active_batch);
+
+  nb::class_<PlannedThresholdTransitionConditions, TransitionConditions>(
+      m, "PlannedThresholdTransitionConditions")
+      .def(nb::init<>())
+      .def(nb::init<int32_t, int64_t>(), "planned_threshold"_a,
+           "max_reserved_threshold"_a = 16)
+      .def_rw("planned_threshold", &PlannedThresholdTransitionConditions::planned_threshold)
+      .def_rw("max_reserved_threshold",
+              &PlannedThresholdTransitionConditions::max_reserved_threshold);
 
   nb::class_<DeviceThresholdTransitionConditions, TransitionConditions>(
       m, "DeviceThresholdTransitionConditions")

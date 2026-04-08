@@ -1,0 +1,52 @@
+{
+    "seed_start": 0,
+    "seed_step": 1,
+    "num_seeds": 1,
+    "start_mem": 550e9,
+    "end_mem": 850e9,
+    "step_mem": 10e9,
+    "horizon": 40000,
+    "dmem": 96e9,
+    "experiments": {
+        "corners": [
+            {
+                "interior": 1,
+                "boundary": 0.1
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1
+            },
+            {
+                "interior": 10,
+                "boundary": 1
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1
+            },
+            {
+                "interior": 100,
+                "boundary": 1
+            },
+            {
+                "interior": 100,
+                "boundary": 10
+            }
+        ]
+    },
+    "cores_per_job": 6,
+    "command_template": [
+        "mpirun",
+        "-n",
+        "8",
+        "python3",
+        "run_all_mapper.py",
+        "--config-name",
+        "16x16x128_dynamic_{exp_name}_cnn",
+        "graph.config.level_memory={mem}",
+        "system.mem={dmem}",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}"
+    ]
+}

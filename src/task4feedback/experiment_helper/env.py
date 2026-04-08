@@ -45,6 +45,11 @@ RUNTIME_ALLOWED_KEYS = {
         "queue_threshold",
         "max_in_flight",
     },
+    "task4feedback.fastsim2.PlannedThresholdTransitionConditions": {
+        "_target_",
+        "planned_threshold",
+        "max_reserved_threshold",
+    },
     "task4feedback.fastsim2.DeviceThresholdTransitionConditions": {
         "_target_",
         "mapped_threshold",
@@ -66,20 +71,32 @@ RUNTIME_ALLOWED_KEYS = {
 
 MAPPER_ALLOWED_KEYS = {
     "task4feedback.fastsim2.DequeueEFTMapper": {"_target_"},
+    "task4feedback.fastsim2.MemoryAwareEFTMapper": {
+        "_target_",
+        "alpha",
+        "eviction_cost_location_state",
+        "overflow_state",
+        "overflow_mode",
+    },
     "task4feedback.fastsim2.DARTSMapper": {
         "_target_",
-        "mapped_threshold",
-        "reserved_threshold",
-        "extended_frontier_enabled",
-        "extended_batch_emission_enabled",
-        "extended_batch_emission_cap",
-        "trace_decisions",
-        "intra_window_coordination",
-        "cascade_passes",
+        "short_horizon_threshold",
+        "medium_horizon_threshold",
+        "emit_short_horizon",
+        "emit_medium_horizon",
+        "short_horizon_k",
+        "medium_horizon_k",
+    },
+    "task4feedback.fastsim2.EnhancedDARTSMapper": {
+        "_target_",
+        "short_horizon_threshold",
+        "medium_horizon_threshold",
+        "emit_short_horizon",
+        "emit_medium_horizon",
+        "short_horizon_k",
+        "medium_horizon_k",
         "finish_time_aware",
-        "pipeline_depth",
-        "starvation_threshold",
-        "max_in_flight",
+        "local_data_first",
     },
 }
 

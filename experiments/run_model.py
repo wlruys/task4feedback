@@ -1,27 +1,28 @@
-import os
-import random
-import pickle
 import fcntl
-from pathlib import Path
-from typing import Iterable, Tuple, List, Dict, Any
-
-import numpy as np
+import os
+import pickle
+import random
 from collections import defaultdict
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
 import hydra
+import numpy as np
 import torch
 from omegaconf import DictConfig
-from torchrl.envs import set_exploration_type, ExplorationType
-from task4feedback.graphs.mesh.plot import _build_state
+from torchrl.envs import ExplorationType, set_exploration_type
+
+from task4feedback.experiment_helper.env import RuntimeEnv, make_env
 from task4feedback.experiment_helper.graph import make_graph_builder
-from task4feedback.experiment_helper.env import make_env, RuntimeEnv
 from task4feedback.experiment_helper.model import (
     create_td_actor_critic_models,
     load_policy_from_checkpoint,
 )
-from task4feedback.interface.wrappers import *
 from task4feedback.experiment_helper.run_name import make_folder_name
+from task4feedback.graphs.mesh.plot import _build_state, animate_mesh_graph
+from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import FeatureDimConfig
-from task4feedback.graphs.mesh.plot import animate_mesh_graph
 
 # =============================================================================
 # Constants
@@ -29,7 +30,7 @@ from task4feedback.graphs.mesh.plot import animate_mesh_graph
 
 
 MAX_ROLLOUT_STEPS = 1_000_000
-EVAL_GRAPH_STEPS = 512
+EVAL_GRAPH_STEPS = 256
 PHASE_LENGTH = 128
 SYSTEM_MEMORY = 96e9
 INFINITE_MEMORY = 9999e9
@@ -53,14 +54,14 @@ def write_results_atomic(path: str, lines: Iterable[str]) -> None:
         fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def csv_entry_exists(path: str, key: Tuple[str, ...]) -> bool:
+def csv_entry_exists(path: str, key: tuple[str, ...]) -> bool:
     """
     Check whether a CSV file already contains an entry starting with `key`.
     """
     if not os.path.exists(path):
         return False
 
-    with open(path, "r") as f:
+    with open(path) as f:
         for line in f:
             parts = line.strip().split(",")
             if len(parts) >= len(key) and tuple(parts[: len(key)]) == tuple(
@@ -157,7 +158,7 @@ class ReplayMapper:
 # ------------------------------------------------------------
 # Interval helpers
 # ------------------------------------------------------------
-def merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+def merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
     if not intervals:
         return []
     intervals = sorted(intervals)
@@ -171,11 +172,11 @@ def merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     return merged
 
 
-def interval_length(intervals: List[Tuple[int, int]]) -> int:
+def interval_length(intervals: list[tuple[int, int]]) -> int:
     return sum(e - s for s, e in intervals)
 
 
-def interval_overlap(a: List[Tuple[int, int]], b: List[Tuple[int, int]]) -> int:
+def interval_overlap(a: list[tuple[int, int]], b: list[tuple[int, int]]) -> int:
     i = j = 0
     overlap = 0
     while i < len(a) and j < len(b):
@@ -195,7 +196,7 @@ def interval_overlap(a: List[Tuple[int, int]], b: List[Tuple[int, int]]) -> int:
 # ------------------------------------------------------------
 # Main analysis
 # ------------------------------------------------------------
-def analyze_policy_run(env) -> Dict[str, Any]:
+def analyze_policy_run(env) -> dict[str, Any]:
     static_state, dynamic_state = _build_state(env)
     graph = env.get_graph()
 
@@ -301,12 +302,12 @@ def analyze_policy_run(env) -> Dict[str, Any]:
 
 def evaluate_model(
     env: RuntimeEnv, infenv: RuntimeEnv, model, num_runs: int
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """
     Run evaluation rollouts and return (avg_time, avg_evictions).
     """
     model.eval()
-    results: List[Tuple[float, float]] = []
+    results: list[tuple[float, float]] = []
     # eft_results: List[Tuple[float, float]] = []
     # inf_results: List[Tuple[float, float]] = []
 
@@ -394,8 +395,8 @@ def configure_training(cfg: DictConfig) -> None:
     )
 
     num_runs = prepare_eval_cfg(cfg)
-    output_lines: List[str] = []
-    output_lines_with_eft: List[str] = []
+    output_lines: list[str] = []
+    output_lines_with_eft: list[str] = []
 
     for model_path in model_dir.glob("*.pt"):
         key = (

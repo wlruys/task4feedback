@@ -1,5 +1,5 @@
 defaults:
-  - 8x8x128_dynamic_noise.yaml
+  - 8x8x128_dynamic_ncorners.yaml
   - feature: cnn_batch
   - network: cond_dilation_cnn_batch
   - _self_
@@ -12,13 +12,13 @@ optimizer:
   lr: 1e-3
 
 system:
-  mem: 80e9
+  mem: 96e9
 
 feature:
   observer:
     prev_frames: 1
     batched: true
-    version: D
+    version: F
   normalization:
     warmup: 10
   add_device_load: True
@@ -36,3 +36,5 @@ network:
 
 wandb:
   name: CNN-A_IEFT
+
+arch: cnn
