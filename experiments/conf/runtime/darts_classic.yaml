@@ -1,0 +1,4 @@
+_delete_: true
+_target_: task4feedback.fastsim2.DeviceThresholdTransitionConditions
+mapped_threshold: 0
+reserved_threshold: -1

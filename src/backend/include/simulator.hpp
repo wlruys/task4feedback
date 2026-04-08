@@ -61,7 +61,7 @@ protected:
     auto &state = scheduler.get_state();
 
     if (state.not_draining() && queues.has_mappable() &&
-        scheduler.conditions.should_map(state, queues)) {
+        scheduler.conditions->should_map(state, queues)) {
       if (use_python_mapper) {
         SPDLOG_DEBUG("Time: {} Releasing control to Python mapper", event.time);
         return ExecutionState::EXTERNAL_MAPPING;

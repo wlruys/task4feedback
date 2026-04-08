@@ -1,7 +1,7 @@
 defaults:
-  - 8x8x128_dynamic_noise.yaml
-  - feature: cnn_batch
-  - network: cond_dilation_cnn_batch
+  - 8x8x128_dynamic_circle.yaml
+  - feature: gnn_batch
+  - network: gnn_baseline
   - _self_
 
 algorithm:
@@ -12,13 +12,13 @@ optimizer:
   lr: 1e-3
 
 system:
-  mem: 80e9
+  mem: 96e9
 
 feature:
   observer:
     prev_frames: 1
     batched: true
-    version: D
+    version: C
   normalization:
     warmup: 10
   add_device_load: True
@@ -35,4 +35,7 @@ network:
     add_progress: True
 
 wandb:
-  name: CNN-A_IEFT
+  name: GNN-Circle
+
+
+arch: gnn

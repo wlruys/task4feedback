@@ -3,6 +3,6 @@ defaults:
   - initialization/orthogonal@initialization
 
 
-_target_: task4feedback.ml.models.GATStateNet
+_target_: task4feedback.ml.models.CandidateTaskGNNStateNet
 hidden_channels: 16
 layer_norm: true

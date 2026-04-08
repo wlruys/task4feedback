@@ -1,0 +1,102 @@
+{
+    "seed_start": 11000000,
+    "seed_step": 1000000,
+    "num_seeds": 20,
+    "start_mem": 20000000000,
+    "end_mem": 60000000000,
+    "step_mem": 4000000000,
+    "horizon": 40000,
+    "dmem": 96000000000,
+    "arch": ["cnn"],
+    "experiments": {
+        "circle": [
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": [
+                    "500e9",
+                    "570e9",
+                    "630e9",
+                    "690e9",
+                    "760e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": [
+                    "590e9",
+                    "670e9",
+                    "740e9",
+                    "810e9",
+                    "890e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": [
+                    "500e9",
+                    "570e9",
+                    "630e9",
+                    "690e9",
+                    "760e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1,
+                "mem": [
+                    "600e9",
+                    "680e9",
+                    "750e9",
+                    "830e9",
+                    "900e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": [
+                    "590e9",
+                    "670e9",
+                    "740e9",
+                    "810e9",
+                    "890e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": [
+                    "500e9",
+                    "570e9",
+                    "630e9",
+                    "690e9",
+                    "760e9"
+                ]
+            }
+        ]
+    },
+    "cores_per_job": 6,
+    "command_template": [
+        "python3",
+        "train.py",
+        "--config-name",
+        "16x16x128_dynamic_{exp_name}_{arch}",
+        "wandb.project=sc26_8gpus_{exp_name}_{interior}-{boundary}_{arch}",
+        "wandb.group={interior}-{boundary}_{arch}_{mem}",
+        "wandb.name={interior}-{boundary}_{arch}_{mem}_{seed_val}",
+        "graph.config.level_memory={mem}",
+        "reward.uniform_reward_scale=1",
+        "algorithm.num_collections={horizon}",
+        "lr_scheduler.total_iters=30000",
+        "seed={seed_val}",
+        "system.mem={dmem}",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}",
+        "eval.eval_interval=50",
+        "eval.exploration_types=['DETERMINISTIC']",
+        "system=8h100"
+    ]
+}

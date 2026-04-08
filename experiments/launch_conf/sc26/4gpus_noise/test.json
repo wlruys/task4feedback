@@ -1,0 +1,47 @@
+{
+    "seed_start": 11000000,
+    "seed_step": 1000000,
+    "num_seeds": 2,
+    "start_mem": 20000000000,
+    "end_mem": 60000000000,
+    "step_mem": 4000000000,
+    "horizon": 40000,
+    "dmem": 96000000000,
+    "arch": ["cnn", "gnn"],
+    "experiments": {
+        "ncircle": [
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": [
+                    "245e9",
+                    "280e9",
+                    "310e9",
+                    "340e9",
+                    "370e9"
+                ]
+            }
+        ]
+    },
+    "cores_per_job": 4,
+    "command_template": [
+        "python3",
+        "train.py",
+        "--config-name",
+        "8x8x128_dynamic_{exp_name}_{arch}",
+        "wandb.project=sc26_4gpus_{exp_name}",
+        "wandb.group={interior}-{boundary}_{arch}_{mem}",
+        "wandb.name={interior}-{boundary}_{arch}_{mem}_{seed_val}",
+        "graph.config.level_memory={mem}",
+        "reward.uniform_reward_scale=10",
+        "algorithm.num_collections={horizon}",
+        "lr_scheduler.total_iters={horizon}",
+        "seed={seed_val}",
+        "system.mem={dmem}",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}",
+        "eval.eval_interval=50",
+        "eval.exploration_types=['DETERMINISTIC']",
+        "system=4h100"
+    ]
+}

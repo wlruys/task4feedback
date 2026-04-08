@@ -1,12 +1,26 @@
 #include "action.hpp"
+#include "mappers.hpp"
 #include "nbh.hpp"
-#include "scheduler.hpp"
 #include <cstdint>
 
 namespace nb = nanobind;
 using namespace nb::literals;
 
 void init_mapper_ext(nb::module_ &m) {
+  nb::enum_<MemoryAwareLocationState>(m, "MemoryAwareLocationState")
+      .value("LAUNCHED", MemoryAwareLocationState::LAUNCHED)
+      .value("RESERVED", MemoryAwareLocationState::RESERVED)
+      .value("MAPPED", MemoryAwareLocationState::MAPPED);
+
+  nb::enum_<MemoryAwareOverflowState>(m, "MemoryAwareOverflowState")
+      .value("RESERVED", MemoryAwareOverflowState::RESERVED)
+      .value("MAPPED", MemoryAwareOverflowState::MAPPED)
+      .value("LAUNCHED", MemoryAwareOverflowState::LAUNCHED);
+
+  nb::enum_<MemoryAwareOverflowMode>(m, "MemoryAwareOverflowMode")
+      .value("FULL_SPILL", MemoryAwareOverflowMode::FULL_SPILL)
+      .value("INCOMING_ONLY", MemoryAwareOverflowMode::INCOMING_ONLY);
+
   nb::bind_vector<std::vector<Action>>(m, "ActionVector");
   nb::class_<Action>(m, "Action")
       .def(nb::init<std::size_t, devid_t, priority_t, priority_t>())
@@ -72,4 +86,66 @@ void init_mapper_ext(nb::module_ &m) {
       .def(nb::init<>())
       .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
       .def(nb::init<DequeueEFTMapper &>(), "other"_a);
+
+  nb::class_<MemoryAwareEFTMapper, DequeueEFTMapper>(m, "MemoryAwareEFTMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t, double>(), "num_tasks"_a, "num_devices"_a,
+           "alpha"_a = 1.0)
+      .def(nb::init<MemoryAwareEFTMapper &>(), "other"_a)
+      .def_rw("alpha", &MemoryAwareEFTMapper::alpha)
+      .def_rw("eviction_cost_location_state", &MemoryAwareEFTMapper::eviction_cost_location_state)
+      .def_rw("overflow_state", &MemoryAwareEFTMapper::overflow_state)
+      .def_rw("overflow_mode", &MemoryAwareEFTMapper::overflow_mode);
+
+  nb::class_<DARTSMapper, Mapper>(m, "DARTSMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
+      .def(nb::init<DARTSMapper &>(), "other"_a)
+      .def_prop_rw("short_horizon_threshold", &DARTSMapper::short_horizon_threshold,
+                   &DARTSMapper::set_short_horizon_threshold)
+      .def_prop_rw("medium_horizon_threshold", &DARTSMapper::medium_horizon_threshold,
+                   &DARTSMapper::set_medium_horizon_threshold)
+      .def_prop_rw("emit_short_horizon", &DARTSMapper::emit_short_horizon,
+                   &DARTSMapper::set_emit_short_horizon)
+      .def_prop_rw("emit_medium_horizon", &DARTSMapper::emit_medium_horizon,
+                   &DARTSMapper::set_emit_medium_horizon)
+      .def_prop_rw("short_horizon_k", &DARTSMapper::short_horizon_k,
+                   &DARTSMapper::set_short_horizon_k)
+      .def_prop_rw("medium_horizon_k", &DARTSMapper::medium_horizon_k,
+                   &DARTSMapper::set_medium_horizon_k)
+      .def(
+          "map_tasks",
+          [](DARTSMapper &mapper, const TaskIDList &tasks,
+             const SchedulerState &state) -> ActionList & {
+            return mapper.map_tasks(std::span<const taskid_t>(tasks.data(), tasks.size()), state);
+          },
+          "tasks"_a, "state"_a, nb::rv_policy::reference_internal);
+
+  nb::class_<EnhancedDARTSMapper, Mapper>(m, "EnhancedDARTSMapper")
+      .def(nb::init<>())
+      .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
+      .def(nb::init<EnhancedDARTSMapper &>(), "other"_a)
+      .def_prop_rw("short_horizon_threshold", &EnhancedDARTSMapper::short_horizon_threshold,
+                   &EnhancedDARTSMapper::set_short_horizon_threshold)
+      .def_prop_rw("medium_horizon_threshold", &EnhancedDARTSMapper::medium_horizon_threshold,
+                   &EnhancedDARTSMapper::set_medium_horizon_threshold)
+      .def_prop_rw("emit_short_horizon", &EnhancedDARTSMapper::emit_short_horizon,
+                   &EnhancedDARTSMapper::set_emit_short_horizon)
+      .def_prop_rw("emit_medium_horizon", &EnhancedDARTSMapper::emit_medium_horizon,
+                   &EnhancedDARTSMapper::set_emit_medium_horizon)
+      .def_prop_rw("short_horizon_k", &EnhancedDARTSMapper::short_horizon_k,
+                   &EnhancedDARTSMapper::set_short_horizon_k)
+      .def_prop_rw("medium_horizon_k", &EnhancedDARTSMapper::medium_horizon_k,
+                   &EnhancedDARTSMapper::set_medium_horizon_k)
+      .def_prop_rw("finish_time_aware", &EnhancedDARTSMapper::finish_time_aware,
+                   &EnhancedDARTSMapper::set_finish_time_aware)
+      .def_prop_rw("local_data_first", &EnhancedDARTSMapper::local_data_first,
+                   &EnhancedDARTSMapper::set_local_data_first)
+      .def(
+          "map_tasks",
+          [](EnhancedDARTSMapper &mapper, const TaskIDList &tasks,
+             const SchedulerState &state) -> ActionList & {
+            return mapper.map_tasks(std::span<const taskid_t>(tasks.data(), tasks.size()), state);
+          },
+          "tasks"_a, "state"_a, nb::rv_policy::reference_internal);
 }

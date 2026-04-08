@@ -753,6 +753,16 @@ public:
     return id_buffer;
   }
 
+  std::pair<std::span<const dataid_t>, std::size_t>
+  getLRUidsIfAvailable(devid_t device_id, std::size_t mem_size,
+                       std::span<const dataid_t> used_ids) const {
+    T4F_INVARIANT(is_valid_device(device_id));
+
+    const std::size_t accumulated =
+        lrus_[device_id].collect_lru_victims(mem_size, used_ids, id_buffer);
+    return {id_buffer, accumulated};
+  }
+
   mem_t get_mem(devid_t device_id) const {
     T4F_INVARIANT(is_valid_device(device_id));
     return lrus_[device_id].used_bytes;
