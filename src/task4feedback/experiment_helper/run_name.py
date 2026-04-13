@@ -70,6 +70,7 @@ def make_folder_name(cfg: DictConfig, change_name=True):
     - interior_ratio: str
     - boundary_ratio: str
     """
+    cfg.graph.config.steps = 256
 
     if (
         cfg.graph.config.get("r_interior") is not None
