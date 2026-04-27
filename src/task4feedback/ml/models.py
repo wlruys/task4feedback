@@ -45,6 +45,11 @@ import torch.nn.functional as F
 import math
 from hydra.utils import instantiate, call
 from omegaconf import DictConfig, OmegaConf
+from typing import Optional, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 def _tiny_last_linear(seq: nn.Sequential, std: float = 1e-4):
     last = None
@@ -3608,14 +3613,6 @@ class LinearMessagePassing(MessagePassing):
         return self.lin(x_j)
 
 
-# ============================================================
-# DilatedResBlockGNN that mirrors DilatedResBlock_SPADE
-#   conv1: exact hop r
-#   conv2: 1-hop
-#   norm/act at both sites
-#   conv2 zero-init for identity-at-init
-# ============================================================
-
 class DilatedResBlockGNN(nn.Module):
     def __init__(
         self,
@@ -4007,10 +4004,8 @@ class DilationStateGNN(nn.Module):
             
         edge_index = data["tasks", "to", "tasks"].edge_index
         # `batch.max()+1` undercounts when some graphs have zero task nodes.
-        # Prefer full graph count from observation batch shape when available.
         B = B_flat
         if len(batch_shape) == 0:
-            # Unbatched path: derive graph count from PyG metadata.
             ptr = getattr(data["tasks"], "ptr", None)
             if ptr is not None and ptr.numel() >= 2:
                 B = int(ptr.numel()) - 1
@@ -4059,8 +4054,6 @@ class DilationStateGNN(nn.Module):
             h = self.eca(h, batch=batch)
 
         # Pack ragged node features to a fixed candidate axis.
-        # `observation_to_heterodata_truncate` drops inactive nodes per graph, so
-        # we cannot reshape by batch size directly.
         C = self.hidden_channels
 
         if B != B_flat:
@@ -4087,17 +4080,6 @@ class DilationStateGNN(nn.Module):
         if len(batch_shape) == 0:
             return h_dense[0]
         return h_dense.view(*batch_shape, M_max, C)
-
-from typing import Optional, Tuple
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-
-# ============================================================
-# Helpers: per-graph pooling on a PyG Batch
-# ============================================================
 
 def global_mean_pool(x: torch.Tensor, batch: torch.Tensor, B: Optional[int] = None) -> torch.Tensor:
     """
@@ -4148,7 +4130,6 @@ def global_softmax_attention_pool(
     if B is None:
         B = int(batch.max().item()) + 1
 
-    # Native PyTorch scatter_reduce for fast segment max
     max_scores = torch.zeros(B, dtype=scores.dtype, device=scores.device)
     max_scores.scatter_reduce_(0, batch, scores, reduce="amax", include_self=False)
     
@@ -4163,12 +4144,6 @@ def global_softmax_attention_pool(
     weighted = x * attn.unsqueeze(-1)  # (N,P)
     pooled = global_add_pool(weighted, batch, B=B)  # (B,P)
     return pooled
-
-# ============================================================
-# Policy head: node embeddings -> per-node logits
-#   CNN: (B,C,H,W) -> (B,H*W,A)
-#   GNN: (N,C) with batch -> (N,A) OR ragged (B, n_i, A)
-# ============================================================
 
 class GNNDilationPolicyHead(nn.Module):
     def __init__(
