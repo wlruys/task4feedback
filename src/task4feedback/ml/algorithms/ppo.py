@@ -260,6 +260,82 @@ def log_training_metrics(
         wandb.log(log_payload)
 
 
+def save_eval_checkpoint_artifact(
+    n_collections: int,
+    n_updates: int,
+    n_samples: int,
+    policy_module: torch.nn.Module,
+    value_module: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR],
+    artifact_name: str,
+    *,
+    final: bool = False,
+) -> Path:
+    checkpoint_kind = "final_eval" if final else "eval"
+    checkpoint_file = save_checkpoint(
+        n_collections,
+        policy_module=policy_module,
+        value_module=value_module,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        filename=f"{artifact_name}_{checkpoint_kind}_{n_collections}.pt",
+        extras={
+            "checkpoint_kind": checkpoint_kind,
+            "n_updates": n_updates,
+            "n_samples": n_samples,
+        },
+    )
+
+    aliases = ["latest", f"eval-{n_collections}"]
+    if n_collections == 0:
+        aliases.append("initial")
+    if final:
+        aliases.append("final")
+
+    log_model_artifact(
+        checkpoint_file,
+        artifact_name=artifact_name,
+        aliases=aliases,
+        metadata={
+            "checkpoint_kind": checkpoint_kind,
+            "n_collections": n_collections,
+            "n_updates": n_updates,
+            "n_samples": n_samples,
+        },
+    )
+    return checkpoint_file
+
+
+def maybe_save_eval_checkpoint_artifact(
+    n_collections: int,
+    n_updates: int,
+    n_samples: int,
+    policy_module: torch.nn.Module,
+    value_module: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR],
+    artifact_name: Optional[str],
+    enabled: bool,
+    *,
+    final: bool = False,
+) -> Optional[Path]:
+    if not enabled or artifact_name is None:
+        return None
+
+    return save_eval_checkpoint_artifact(
+        n_collections,
+        n_updates,
+        n_samples,
+        policy_module=policy_module,
+        value_module=value_module,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        artifact_name=artifact_name,
+        final=final,
+    )
+
+
 def run_ppo(
     actor_critic_module: ActorCriticModule,
     env_constructors: List[Callable[[], EnvBase]],
@@ -270,6 +346,9 @@ def run_ppo(
     lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
     seed: int = 0,
     eval_location = None,
+    wandb_model_artifact_name: Optional[str] = None,
+    log_eval_checkpoints_to_wandb: bool = False,
+    log_final_checkpoint_to_wandb: bool = False,
 ):
     if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
@@ -433,6 +512,17 @@ def run_ppo(
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
         metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0, eval_location=eval_location)
+        maybe_save_eval_checkpoint_artifact(
+            0,
+            0,
+            0,
+            policy_module=collector.policy,
+            value_module=loss_module.critic_network,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            artifact_name=wandb_model_artifact_name,
+            enabled=log_eval_checkpoints_to_wandb,
+        )
 
     training.info("Starting PPO training loop")
 
@@ -544,9 +634,20 @@ def run_ppo(
         if should_eval(n_collections, eval_config=eval_config):
             collector.policy.eval()
             metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
+            maybe_save_eval_checkpoint_artifact(
+                n_collections,
+                n_updates,
+                n_samples,
+                policy_module=collector.policy,
+                value_module=loss_module.critic_network,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                artifact_name=wandb_model_artifact_name,
+                enabled=log_eval_checkpoints_to_wandb,
+            )
             if eval_config.pickle_path is not None:
-                if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-                    max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+                if metrics["eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
+                    max_performance = metrics["eval/DETERMINISTIC"]["mean_vsEFT"]
                     training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
                     if logging_config.best_policy_dir is not None:
                         save_checkpoint(
@@ -578,6 +679,18 @@ def run_ppo(
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
+        maybe_save_eval_checkpoint_artifact(
+            n_collections,
+            n_updates,
+            n_samples,
+            policy_module=collector.policy,
+            value_module=loss_module.critic_network,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            artifact_name=wandb_model_artifact_name,
+            enabled=log_final_checkpoint_to_wandb,
+            final=True,
+        )
 
     save_checkpoint(n_collections, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
@@ -594,6 +707,9 @@ def run_ppo_lstm(
     lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
     seed: int = 0,
     eval_location = None,
+    wandb_model_artifact_name: Optional[str] = None,
+    log_eval_checkpoints_to_wandb: bool = False,
+    log_final_checkpoint_to_wandb: bool = False,
 ):
     if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
@@ -785,6 +901,17 @@ def run_ppo_lstm(
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
         run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0, eval_location=eval_location)
+        maybe_save_eval_checkpoint_artifact(
+            0,
+            0,
+            0,
+            policy_module=collector.policy,
+            value_module=loss_module.critic_network,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            artifact_name=wandb_model_artifact_name,
+            enabled=log_eval_checkpoints_to_wandb,
+        )
 
     start_t = time.perf_counter()
 
@@ -862,6 +989,17 @@ def run_ppo_lstm(
 
         if should_eval(n_collections, eval_config=eval_config):
             run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
+            maybe_save_eval_checkpoint_artifact(
+                n_collections,
+                n_updates,
+                n_samples,
+                policy_module=collector.policy,
+                value_module=loss_module.critic_network,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                artifact_name=wandb_model_artifact_name,
+                enabled=log_eval_checkpoints_to_wandb,
+            )
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at update: {n_updates}")
@@ -876,6 +1014,18 @@ def run_ppo_lstm(
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
+        maybe_save_eval_checkpoint_artifact(
+            n_collections,
+            n_updates,
+            n_samples,
+            policy_module=collector.policy,
+            value_module=loss_module.critic_network,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            artifact_name=wandb_model_artifact_name,
+            enabled=log_final_checkpoint_to_wandb,
+            final=True,
+        )
 
     save_checkpoint(
         n_collections,

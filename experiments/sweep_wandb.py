@@ -7,6 +7,7 @@ from helper.graph import make_graph_builder
 from helper.env import make_env
 from helper.model import create_td_actor_critic_models
 from helper.algorithm import create_optimizer, create_lr_scheduler
+from helper.wandb_artifact import model_artifact_settings
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
@@ -17,7 +18,7 @@ from task4feedback.ml.models import *
 
 from hydra.experimental.callbacks import Callback
 from hydra.core.utils import JobReturn
-from omegaconf import DictConfig, open_dict
+from omegaconf import open_dict
 from pathlib import Path
 import git
 import os
@@ -106,6 +107,7 @@ def configure_training(cfg: DictConfig):
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             seed=cfg.seed,
+            **model_artifact_settings(cfg),
         )
     else:
         run_ppo(
@@ -117,16 +119,18 @@ def configure_training(cfg: DictConfig):
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             seed=cfg.seed,
+            **model_artifact_settings(cfg),
         )
 
 
 @hydra.main(config_path="conf", config_name="8x8x128_dynamic_diag_cnn.yaml", version_base=None)
 def main(cfg: DictConfig):
     if cfg.wandb.enabled:
+        run_name = make_run_name(cfg)
         wandb.init(
             project="8x8x128_sweep",
             config=OmegaConf.to_container(cfg, resolve=True),
-            name=make_run_name(cfg),
+            name=run_name,
             # name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
             tags=cfg.wandb.tags,

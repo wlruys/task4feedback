@@ -1,16 +1,13 @@
 from tensordict import TensorDict
 import torch
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 from torchrl.envs import set_exploration_type, ExplorationType
 from torchrl.envs.utils import check_env_specs
-from tensordict import TensorDict
 from task4feedback.graphs.mesh.plot import animate_mesh_graph, PlotConfig, ColorConfig
 from dataclasses import dataclass, field
 import wandb
 from pathlib import Path
 import time
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
 from task4feedback.logging import training
 import os
 import git
@@ -21,7 +18,6 @@ import math
 import pathlib
 from collections import defaultdict
 from types import MappingProxyType
-from typing import Any, Mapping
 
 
 def compute_advantage(td: TensorDict):
@@ -547,3 +543,23 @@ def save_checkpoint(
     except Exception as e:
         training.error(f"Failed to save checkpoint at step {step}: {e}")
         raise
+
+
+def log_model_artifact(
+    checkpoint_file: Path,
+    artifact_name: str,
+    aliases: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    if wandb is None or wandb.run is None:
+        training.warning(f"Skipping W&B artifact upload for {checkpoint_file}: no active W&B run.")
+        return
+
+    artifact = wandb.Artifact(
+        name=artifact_name,
+        type="model",
+        metadata=metadata or {},
+    )
+    artifact.add_file(str(checkpoint_file), name=checkpoint_file.name)
+    wandb.log_artifact(artifact, aliases=aliases)
+    training.info(f"Logged W&B model artifact {artifact_name} from {checkpoint_file}")

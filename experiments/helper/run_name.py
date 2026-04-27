@@ -1,6 +1,11 @@
 # run_name.py
 from __future__ import annotations
-import hashlib, datetime, re, json
+
+import datetime
+import hashlib
+import json
+import re
+
 from omegaconf import DictConfig, OmegaConf
 from typing import Sequence
 
@@ -29,3 +34,7 @@ def make_run_name(cfg: DictConfig) -> str:
     h = cfg_hash(cfg)
     date = datetime.datetime.now().strftime("%m%d-%H%M%S")
     return f"{slug}-{date}-{h}"
+
+
+def make_model_artifact_name(run_name: str) -> str:
+    return slugify(["model", run_name], maxlen=128)

@@ -6,3 +6,7 @@ group: null
 tags:
   - ppo
   - default
+model_artifact:
+  enabled: false
+  log_eval_checkpoints: true
+  log_final_checkpoint: true
