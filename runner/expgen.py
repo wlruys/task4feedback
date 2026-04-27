@@ -17,10 +17,6 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Seque
 import yaml
 
 
-# =========================
-# Utilities
-# =========================
-
 def stable_json(obj: Any) -> str:
     """Deterministic JSON (sorted keys, no spaces) for hashing/serialization."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
@@ -72,10 +68,6 @@ def next_batch_start_index(batch_dir: Path) -> int:
     existing = sorted(p for p in batch_dir.glob("batch_*.txt") if p.is_file())
     return len(existing)
 
-
-# =========================
-# Validation
-# =========================
 
 class ConfigError(ValueError):
     pass
@@ -338,10 +330,6 @@ class ConfigSpace:
         return -1
 
 
-# =========================
-# CLI builders (Hydra)
-# =========================
-
 def to_hydra_cli(cfg: Config, base_cmd: str) -> str:
     """
     Convert a Config to a Hydra CLI string with shell-safe quoting:
@@ -357,10 +345,6 @@ def to_hydra_cli(cfg: Config, base_cmd: str) -> str:
     tokens.append(sh_single_quote(f"wandb.name={cfg.wandb_name}"))
     return " ".join([base_cmd] + tokens)
 
-
-# =========================
-# Experiment builder
-# =========================
 
 class ExperimentBuilder:
     def __init__(self, cli_base: str, packs: Sequence[Pack], strict: bool = True):
@@ -492,10 +476,6 @@ class ExperimentBuilder:
         return extended.build(outdir=outdir, batch_size=batch_size, skip_existing=True, write_csv=write_csv)
 
 
-# =========================
-# SLURM integration
-# =========================
-
 def write_slurm_script(
     job_name: str,
     batch_files: List[Path],
@@ -539,21 +519,12 @@ def write_slurm_script(
     if account:   lines.append(f"#SBATCH --account={account}")
     if qos:       lines.append(f"#SBATCH --qos={qos}")
 
+
+    # TODO: 
     body = f"""
 set -euo pipefail
 
-########## micromamba bootstrap ##########
-# Honors MICROMAMBA_EXE or MAMBA_EXE if you’ve set them; falls back to `micromamba` on PATH.
-MICROMAMBA="/scratch/06081/wlruys/micromamba/micromamba"
-if command -v "$MICROMAMBA" >/dev/null 2>&1; then
-  # Initialize the shell integration for bash in a non-interactive context
-  eval "$("$MICROMAMBA" shell hook -s bash --root-prefix /scratch/06081/wlruys/micromamba_prefix)"
-  # Activate your env; change "py313" to your actual env name if different
-  micromamba activate pyt4f
-else
-  echo "[WARN] micromamba not found (MICROMAMBA_EXE/MAMBA_EXE not set and 'micromamba' not on PATH)." >&2
-fi
-##########################################
+# ARTIFACT: Add conda/venv/mamba activation here if needed, e.g.:
 
 SLURM_JOB_ID="${{SLURM_JOB_ID:-nojid}}"
 SLURM_ARRAY_TASK_ID="${{SLURM_ARRAY_TASK_ID:-0}}"
@@ -580,7 +551,9 @@ export TMUX_LOG_DIR="slurm_logs/mylocal/${{SLURM_JOB_ID}}"
 export TMUX_PREFIX="mylocal_${{SLURM_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}"
 mkdir -p "$TMUX_LOG_DIR"
 
-# Absolute path to the launcher; call via bash and quote properly
+# Absolute path to the launcher; call via bash and quote properly:
+# ARTIFACT: Update to path on the cluster with launcher script (e.g., run_tmux_launcher.sh).
+
 LAUNCHER="/scratch/06081/wlruys/task4feedback/runner/run_tmux_launcher.sh"
 if [[ ! -f "$LAUNCHER" ]]; then
   echo "[ERROR] Launcher not found at: $LAUNCHER" >&2
@@ -602,10 +575,6 @@ def submit_sbatch(slurm_script: Path, dry_run: bool = False) -> None:
         subprocess.run(["sbatch", str(slurm_script)], check=True)
 
 
-# =========================
-# Local (no SLURM) launcher helpers
-# =========================
-
 def _ensure_executable(path: Path) -> List[str]:
     """Return argv to execute launcher (direct if executable, otherwise via bash)."""
     p = Path(path)
@@ -613,11 +582,6 @@ def _ensure_executable(path: Path) -> List[str]:
     if p.is_file() and os.access(str(p), os.X_OK):
         return [str(p)]
     return ["bash", str(p)]
-
-
-# =========================
-# CLI commands
-# =========================
 
 def _read_hashes_arg(hashes: Optional[List[str]], hashes_file: Optional[str]) -> Optional[List[str]]:
     acc: List[str] = []
@@ -754,10 +718,6 @@ def cli_clean(args: argparse.Namespace) -> None:
             f.unlink()
             print(f"[CLEAN] Removed {f}")
 
-
-# =========================
-# CLI glue
-# =========================
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="expgen", description="Experiment batch generator + local/SLURM launch.")

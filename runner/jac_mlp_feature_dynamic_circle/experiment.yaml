@@ -4,7 +4,7 @@ packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_mlp_feature_dynamic_circle_jae_random
+          project: stencil_mlp_feature_dynamic_circle
         tag: "stencil-MLP-Feature"
   - name: collections
     options:
@@ -71,11 +71,6 @@ packs:
         tag: "pbrs"
   - name: block_time
     options:
-      - graph:
-          config:
-            r_interior: 0.1
-            r_boundary: 0.1
-        tag: "1:0.1:0.1"
       - graph:
           config:
             r_interior: 2

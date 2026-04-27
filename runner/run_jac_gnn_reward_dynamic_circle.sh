@@ -4,14 +4,14 @@ set -euo pipefail
 RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-EXPERIMENT_DIR="${RUNNER_DIR}/jac_mlp_feature_8"
+EXPERIMENT_DIR="${RUNNER_DIR}/jac_gnn_reward_dynamic_circle"
 YAML_FILE="${EXPERIMENT_DIR}/experiment.yaml"
 OUTPUT_DIR="${EXPERIMENT_DIR}/outputs"
 SLURM_LOG_DIR="${EXPERIMENT_DIR}/slurm_logs"
 
 BATCH_SIZE=28
 K_PER_SESSION=4
-JOB_NAME="jac_mlp_feature_8"
+JOB_NAME="jac_gnn_reward_dynamic_circle"
 PARTITION="gg"
 TIME_LIMIT="08:00:00"
 LAUNCHER="${RUNNER_DIR}/run_tmux_launcher.sh"

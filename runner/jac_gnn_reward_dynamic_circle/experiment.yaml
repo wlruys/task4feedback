@@ -1,11 +1,11 @@
-cli_base: "python experiments/train.py --config-name 8x8x128_dynamic_circle_cnn.yaml"
+cli_base: "python experiments/train.py --config-name 8x8x128_dynamic_circle_gnn.yaml"
 
 packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_cnn_reward_dynamic_circle
-        tag: "stencil-CNN-Reward"
+          project: stencil_gnn_reward_dynamic_circle
+        tag: "stencil-GNN-Reward"
   - name: collections
     options:
       - algorithm:

@@ -84,9 +84,21 @@ packs:
     options:
       - seed: 42
         tag: "seed42"
-      - seed: 256
-        tag: "seed256"
-      - seed: 1024
-        tag: "seed1024"
-      - seed: 2024
-        tag: "seed2024"
+      - seed: 923475
+        tag: "seed923475"
+      - seed: 1110004433
+        tag: "seed1110004433"
+      - seed: 3442234677
+        tag: "seed3442234677"
+      - seed: 81087672
+        tag: "seed81087672"
+      - seed: 1765963171
+        tag: "seed1765963171"
+      - seed: 1253822285
+        tag: "seed1253822285"
+      - seed: 810132442
+        tag: "seed810132442"
+      - seed: 2017945801
+        tag: "seed2017945801"
+      - seed: 3169876321
+        tag: "seed3169876321"

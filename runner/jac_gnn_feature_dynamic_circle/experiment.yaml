@@ -1,11 +1,11 @@
-cli_base: "python experiments/train.py --config-name 8x8x128_dynamic_circle_cnn.yaml"
+cli_base: "python experiments/train.py --config-name 8x8x128_dynamic_circle_gnn.yaml"
 
 packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_cnn_reward_dynamic_circle
-        tag: "stencil-CNN-Reward"
+          project: stencil_gnn_feature_dynamic_circle
+        tag: "stencil-GNN-Feature"
   - name: collections
     options:
       - algorithm:
@@ -38,6 +38,14 @@ packs:
     options:
       - feature:
           observer:
+            version: "A"
+        tag: "Top-Pred-Device"
+      - feature:
+          observer:
+            version: "B"
+        tag: "Top-Pred-Device-Residency"
+      - feature:
+          observer:
             version: "C"
         tag: "Top-Pred-Device-Residency-Coord"
   - name: reward
@@ -47,11 +55,6 @@ packs:
           sparse_reward_scale: 10
           dense_reward_scale: 10
         tag: "pbrs"
-      - reward:
-          pbrs: True
-          sparse_reward_scale: 10
-          dense_reward_scale: 0
-        tag: "sparse"
   - name: block_time
     options:
       - graph:
