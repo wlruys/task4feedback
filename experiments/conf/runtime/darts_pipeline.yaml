@@ -1,5 +1,0 @@
-_delete_: true
-_target_: task4feedback.fastsim2.DARTSPipelineTransitionConditions
-pipeline_depth: 4
-max_in_flight: 16
-starvation_threshold: 1

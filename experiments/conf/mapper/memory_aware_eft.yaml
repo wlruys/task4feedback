@@ -1,7 +1,0 @@
-_delete_: true
-internal:
-  _target_: task4feedback.fastsim2.MemoryAwareEFTMapper
-  alpha: 1.0
-  eviction_cost_location_state: 1
-  overflow_state: 0
-  overflow_mode: 1

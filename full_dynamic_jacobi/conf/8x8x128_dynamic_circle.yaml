@@ -1,0 +1,73 @@
+defaults:
+  - graph: dynamic_jacobi_circle
+  - reward: incremental_schedule
+  - system: 4h100
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: linear_decay
+  - noise: none
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: task4feedback.experiment_helper.hydra.GitInfo
+
+seed: 256
+deterministic_torch: true
+
+reward:
+  verbose: False
+  random_start: False
+
+graph:
+  config:
+    steps: 256
+    n: 8
+    level_memory: 44e9
+    boundary_width: 0.25
+  env:
+    change_priority: False
+    change_location: False
+    change_duration: False
+    seed: 1
+
+algorithm:
+  num_collections: 20000
+  rollout_steps: 64
+  workers: 4
+  graphs_per_collection: 4
+  ent_coef: 0.00025
+  sample_slices: False
+  slice_len: 16
+  gamma: 0.99
+  lmbda: 0.95
+  minibatch_size: 64
+  collector: "multi_sync"
+
+optimizer:
+  lr: 1e-3
+
+runtime:
+  open_in_flight: 16
+  close_in_flight: 21
+  starvation_threshold: 5
+
+wandb:
+  enabled: true
+  project: 8x8x128_bump
+  name: CNN-A_IEFT
+
+eval:
+  animation_interval: 0
+  eval_interval: 50
+  max_frames: 400
+  video_seconds: 15
+  samples: 1
+  pickle_path: ./pickled_evaluation/8x8x128_circle_1:1:1.pkl
+  expert_path: parmetis
+  

@@ -1,0 +1,11 @@
+_target_: task4feedback.ml.env.IncrementalSchedule
+_partial_: true
+k: 0
+random_start: False
+terminal_reward: True
+sparse_reward_scale: 1
+dense_reward_scale: 1
+uniform_reward_scale: 0 # This overrides both sparse and dense reward scale if > 0
+verbose: False
+baseline_policy: EFT
+reward_interval: 1

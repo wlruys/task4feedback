@@ -1,9 +1,0 @@
-_delete_: true
-internal:
-  _target_: task4feedback.fastsim2.DARTSMapper
-  short_horizon_threshold: 2
-  medium_horizon_threshold: 4
-  emit_short_horizon: true
-  emit_medium_horizon: true
-  short_horizon_k: 1
-  medium_horizon_k: 1

@@ -1,0 +1,1 @@
+python3 task_launcher.py --config launch_conf/train.json --run

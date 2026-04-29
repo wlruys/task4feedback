@@ -1,8 +1,0 @@
-project: gnn-dev
-name: default
-enabled: true
-dir: /home/cc/task4feedback_torchrl/experiments/outputs/workspace/scheduling/logs
-group: null
-tags:
-  - ppo
-  - default

@@ -1,8 +1,0 @@
-_target_: task4feedback.ml.algorithms.LoggingConfig
-stats_interval: 50
-save_interval: 50
-checkpoint_interval: 500
-best_policy_dir: null
-best_policy_name: null
-log_best_policy: true
-checkpoint_dir: null

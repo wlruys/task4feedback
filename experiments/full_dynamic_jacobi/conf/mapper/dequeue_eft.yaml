@@ -1,3 +1,0 @@
-_delete_: true
-internal:
-  _target_: task4feedback.fastsim2.DequeueEFTMapper
